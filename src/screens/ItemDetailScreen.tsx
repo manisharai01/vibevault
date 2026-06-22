@@ -40,6 +40,7 @@ import {
   getDealScore,
   getPredictionConfidence,
 } from '../services/priceEngine';
+import { openItemOnMarketplace } from '../services/linking';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -106,10 +107,17 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
     Alert.alert('✅ Price Alert Set!', `We'll notify you when "${item.title}" drops below $${target.toFixed(2)}`);
   };
 
+  const handleOpenMarketplace = async () => {
+    const opened = await openItemOnMarketplace(item);
+    if (!opened) {
+      Alert.alert('Unable to open link', 'Could not open this marketplace link on your device.');
+    }
+  };
+
   const TABS = [
-    { key: 'overview', label: '📋 Overview' },
-    { key: 'price', label: '📈 Price' },
-    { key: 'style', label: '🎨 Style Fit' },
+    { key: 'overview', label: 'Overview' },
+    { key: 'price', label: 'Price' },
+    { key: 'style', label: 'Style Fit' },
   ];
 
   return (
@@ -233,7 +241,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
           <View style={styles.tabContent}>
             {/* Description */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>📝 About This Item</Text>
+              <Text style={styles.sectionTitle}>About This Item</Text>
               <Text style={styles.description}>{item.description}</Text>
               <View style={styles.listingRow}>
                 <Text style={styles.listingLabel}>Listed:</Text>
@@ -247,7 +255,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
 
             {/* Quick Deal Metrics */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>🔥 Deal Snapshot</Text>
+              <Text style={styles.sectionTitle}>Deal Snapshot</Text>
               <View style={styles.metricsGrid}>
                 <View style={styles.metricCard}>
                   <Text style={styles.metricBig}>{dealScore}</Text>
@@ -280,7 +288,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
 
             {/* Eco Impact */}
             <GradientCard style={styles.section} gradient={Colors.gradientEco}>
-              <Text style={styles.sectionTitle}>🌍 Eco Impact</Text>
+              <Text style={styles.sectionTitle}>Eco Impact</Text>
               <Text style={styles.ecoDesc}>
                 By choosing this thrifted item over a new one, you're contributing to:
               </Text>
@@ -310,13 +318,13 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
           <View style={styles.tabContent}>
             {/* Current Price vs Predicted */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>📈 Price History & Forecast</Text>
+              <Text style={styles.sectionTitle}>Price History and Forecast</Text>
               <PriceChart history={item.priceHistory} forecast={forecast} height={160} />
             </GradientCard>
 
             {/* Optimal window */}
             <GradientCard style={styles.section} gradient={Colors.gradientEco}>
-              <Text style={styles.sectionTitle}>⏰ Best Time to Buy</Text>
+              <Text style={styles.sectionTitle}>Best Time to Buy</Text>
               <Text style={styles.recommendation}>{optimal.recommendation}</Text>
               <View style={styles.optimalGrid}>
                 <View style={styles.optimalItem}>
@@ -340,7 +348,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
 
             {/* Predictions with confidence */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>🎯 AI Price Predictions</Text>
+              <Text style={styles.sectionTitle}>AI Price Predictions</Text>
               <View style={styles.predRow}>
                 <View style={styles.predBox}>
                   <Text style={styles.predDays}>7-day</Text>
@@ -366,7 +374,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
 
             {/* Set Price Alert */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>🔔 Price Alert</Text>
+              <Text style={styles.sectionTitle}>Price Alert</Text>
               {hasAlert ? (
                 <View style={styles.alertActive}>
                   <Text style={styles.alertActiveText}>✅ You have an active alert for this item.</Text>
@@ -403,7 +411,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
           <View style={styles.tabContent}>
             {/* Match breakdown */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>✨ Why This Matches Your Vibe</Text>
+              <Text style={styles.sectionTitle}>Why This Matches Your Vibe</Text>
               <View style={styles.matchCircle}>
                 <LinearGradient
                   colors={item.matchScore >= 80 ? Colors.gradientEco as [string,string] : Colors.gradientPrimary as [string,string]}
@@ -424,7 +432,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
 
             {/* Style archetypes */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>🏷️  Style Archetypes</Text>
+              <Text style={styles.sectionTitle}>Style Archetypes</Text>
               {item.styleArchetypes.map((arch) => {
                 const userHas = profile.styleArchetypes.includes(arch);
                 return (
@@ -445,7 +453,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
 
             {/* Color palette */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>🎨 Color Palette</Text>
+              <Text style={styles.sectionTitle}>Color Palette</Text>
               <View style={styles.colorsRow}>
                 {item.colors.map((c, i) => (
                   <View key={i} style={[styles.colorSwatch, { backgroundColor: c }]} />
@@ -455,7 +463,7 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
 
             {/* Styling tips */}
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>💡 Styling Tips</Text>
+              <Text style={styles.sectionTitle}>Styling Tips</Text>
               {getStylingTips(item).map((tip, i) => (
                 <View key={i} style={styles.tipRow}>
                   <Text style={styles.tipBullet}>•</Text>
@@ -470,11 +478,11 @@ export default function ItemDetailScreen({ route, navigation }: Props) {
       {/* Bottom CTA */}
       <View style={[styles.bottomCta, { paddingBottom: insets.bottom + 10 }]}>
         <TouchableOpacity style={styles.ctaWishlist} onPress={handleWishlistToggle} activeOpacity={0.8}>
-          <Text style={styles.ctaWishlistText}>{isWishlisted ? '❤️ Saved' : '🤍 Save'}</Text>
+          <Text style={styles.ctaWishlistText}>{isWishlisted ? 'Saved' : 'Save'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity activeOpacity={0.85} style={{ flex: 1 }}>
+        <TouchableOpacity activeOpacity={0.85} style={{ flex: 1 }} onPress={handleOpenMarketplace}>
           <LinearGradient colors={Colors.gradientPrimary as [string,string]} style={styles.ctaBuy}>
-            <Text style={styles.ctaBuyText}>🛍️ View on {item.platform}</Text>
+            <Text style={styles.ctaBuyText}>View on {item.platform}</Text>
           </LinearGradient>
         </TouchableOpacity>
       </View>

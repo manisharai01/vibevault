@@ -27,7 +27,7 @@ import {
   PLATFORM_COLORS,
 } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { FashionItem, PriceAlert } from '../types';
+import { FashionItem, Platform, PriceAlert, Region } from '../types';
 import GradientCard from '../components/common/GradientCard';
 import PriceChart from '../components/common/PriceChart';
 import {
@@ -42,9 +42,16 @@ export default function PriceScreen({ navigation }: { navigation: any }) {
     useStore();
   const [alertPrice, setAlertPrice] = useState('');
   const [viewMode, setViewMode] = useState<'deals' | 'alerts' | 'wishlist'>('deals');
+  const [selectedPlatform, setSelectedPlatform] = useState<'All' | Platform>('All');
+  const [selectedRegion, setSelectedRegion] = useState<'All' | Region>('All');
+
+  const PLATFORM_FILTERS: Array<'All' | Platform> = ['All', 'Myntra', 'Meesho', 'Amazon', 'Flipkart', 'Depop', 'Poshmark', 'Vinted', 'ThredUp', 'Local Thrift'];
+  const REGION_FILTERS: Array<'All' | Region> = ['All', 'India', 'US', 'EU', 'Global'];
 
   // Sort items by deal score
   const topDeals = [...recommendedItems]
+    .filter((item) => selectedPlatform === 'All' || item.platform === selectedPlatform)
+    .filter((item) => selectedRegion === 'All' || item.region === selectedRegion)
     .map((item) => ({ ...item, dealScore: getDealScore(item) }))
     .sort((a, b) => b.dealScore - a.dealScore);
 
@@ -71,7 +78,7 @@ export default function PriceScreen({ navigation }: { navigation: any }) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 100 }}>
       <LinearGradient colors={[Colors.primaryDark, Colors.background]} style={styles.header}>
-        <Text style={styles.headerTitle}>💰 Deal Detective</Text>
+        <Text style={styles.headerTitle}>Deal Detector</Text>
         <Text style={styles.headerSub}>AI-powered price tracking & predictions</Text>
       </LinearGradient>
 
@@ -84,16 +91,40 @@ export default function PriceScreen({ navigation }: { navigation: any }) {
             onPress={() => setViewMode(mode)}
           >
             <Text style={[styles.toggleText, viewMode === mode && styles.toggleTextActive]}>
-              {mode === 'deals' ? '🔥 Top Deals' : mode === 'alerts' ? `🔔 Alerts (${priceAlerts.length})` : `❤️ Wishlist (${wishlistItems.length})`}
+              {mode === 'deals' ? 'Top Deals' : mode === 'alerts' ? `Alerts (${priceAlerts.length})` : `Wishlist (${wishlistItems.length})`}
             </Text>
           </TouchableOpacity>
         ))}
       </View>
 
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+        {PLATFORM_FILTERS.map((platform) => (
+          <TouchableOpacity
+            key={platform}
+            style={[styles.filterChip, selectedPlatform === platform && styles.filterChipActive]}
+            onPress={() => setSelectedPlatform(platform)}
+          >
+            <Text style={[styles.filterChipText, selectedPlatform === platform && styles.filterChipTextActive]}>{platform}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
+        {REGION_FILTERS.map((region) => (
+          <TouchableOpacity
+            key={region}
+            style={[styles.filterChip, selectedRegion === region && styles.filterChipActive]}
+            onPress={() => setSelectedRegion(region)}
+          >
+            <Text style={[styles.filterChipText, selectedRegion === region && styles.filterChipTextActive]}>{region}</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
       {/* Deals View */}
       {viewMode === 'deals' && (
         <View style={styles.listSection}>
-          <Text style={styles.listTitle}>Today's Best Deals</Text>
+          <Text style={styles.listTitle}>Best Deals</Text>
           {topDeals.slice(0, 8).map((item) => {
             const optimal = getOptimalPurchaseWindow(item);
             return (
@@ -129,7 +160,7 @@ export default function PriceScreen({ navigation }: { navigation: any }) {
           <Text style={styles.listTitle}>Active Price Alerts</Text>
           {priceAlerts.length === 0 ? (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyEmoji}>🔔</Text>
+              <Text style={styles.emptyEmoji}>•</Text>
               <Text style={styles.emptyText}>No price alerts set</Text>
               <Text style={styles.emptyHint}>Tap any deal to set a price alert</Text>
             </View>
@@ -145,7 +176,7 @@ export default function PriceScreen({ navigation }: { navigation: any }) {
                       Current: ${item.currentPrice.toFixed(2)} → Target: ${alert.targetPrice.toFixed(2)}
                     </Text>
                     {item.currentPrice <= alert.targetPrice && (
-                      <Text style={styles.alertTriggered}>🎉 Price target reached!</Text>
+                      <Text style={styles.alertTriggered}>Price target reached</Text>
                     )}
                   </View>
                   <TouchableOpacity onPress={() => removePriceAlert(alert.id)}>
@@ -164,7 +195,7 @@ export default function PriceScreen({ navigation }: { navigation: any }) {
           <Text style={styles.listTitle}>Wishlist Price Tracking</Text>
           {wishlistItems.length === 0 ? (
             <View style={styles.emptyState}>
-              <Text style={styles.emptyEmoji}>❤️</Text>
+              <Text style={styles.emptyEmoji}>•</Text>
               <Text style={styles.emptyText}>Your wishlist is empty</Text>
               <Text style={styles.emptyHint}>Heart items in Discover to track them here</Text>
             </View>
@@ -196,14 +227,14 @@ export default function PriceScreen({ navigation }: { navigation: any }) {
 
       {/* Market Insights */}
       <GradientCard style={styles.insightCard}>
-        <Text style={styles.sectionTitle}>📊 Market Insights</Text>
+        <Text style={styles.sectionTitle}>Market Insights</Text>
         <View style={styles.insightGrid}>
           <View style={styles.insightItem}>
             <Text style={styles.insightValue}>{recommendedItems.length}</Text>
             <Text style={styles.insightLabel}>Items Tracked</Text>
           </View>
           <View style={styles.insightItem}>
-            <Text style={styles.insightValue}>5</Text>
+            <Text style={styles.insightValue}>{new Set(recommendedItems.map((i) => i.platform)).size}</Text>
             <Text style={styles.insightLabel}>Platforms</Text>
           </View>
           <View style={styles.insightItem}>
@@ -251,6 +282,18 @@ const styles = StyleSheet.create({
   toggleBtnActive: { backgroundColor: Colors.primaryDark, borderColor: Colors.primary },
   toggleText: { color: Colors.textMuted, fontSize: FontSize.xs, fontWeight: '600' },
   toggleTextActive: { color: Colors.primaryLight },
+  filterRow: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, marginBottom: Spacing.sm },
+  filterChip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.surface,
+  },
+  filterChipActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryDark },
+  filterChipText: { color: Colors.textMuted, fontSize: FontSize.xs, fontWeight: '700' },
+  filterChipTextActive: { color: Colors.primaryLight },
 
   // List Section
   listSection: { paddingHorizontal: Spacing.lg },

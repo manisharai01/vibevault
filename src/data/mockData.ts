@@ -2,7 +2,7 @@
 // VibeVault – Mock Fashion Items Data
 // ============================================================
 
-import { FashionItem, Quest, Badge, LeaderboardEntry } from '../types';
+import { FashionItem, Quest, Badge, LeaderboardEntry, Platform, Region } from '../types';
 
 const generatePriceHistory = (base: number, days: number = 30): { date: string; price: number }[] => {
   const history: { date: string; price: number }[] = [];
@@ -14,6 +14,61 @@ const generatePriceHistory = (base: number, days: number = 30): { date: string; 
     history.push({ date: d.toISOString().split('T')[0], price: Math.round(price * 100) / 100 });
   }
   return history;
+
+const PLATFORM_ROTATION: Platform[] = [
+  'Myntra',
+  'Meesho',
+  'Amazon',
+  'Flipkart',
+  'Vinted',
+  'Depop',
+  'Poshmark',
+  'ThredUp',
+  'Local Thrift',
+];
+
+const REGION_BY_PLATFORM: Record<Platform, Region> = {
+  Myntra: 'India',
+  Meesho: 'India',
+  Amazon: 'India',
+  Flipkart: 'India',
+  Depop: 'Global',
+  Poshmark: 'US',
+  Vinted: 'EU',
+  ThredUp: 'US',
+  'Local Thrift': 'Global',
+};
+
+const buildProductUrl = (platform: Platform, title: string): string => {
+  const q = encodeURIComponent(title);
+  switch (platform) {
+    case 'Myntra':
+      return `https://www.myntra.com/${q}`;
+    case 'Meesho':
+      return `https://www.meesho.com/search?q=${q}`;
+    case 'Amazon':
+      return `https://www.amazon.in/s?k=${q}`;
+    case 'Flipkart':
+      return `https://www.flipkart.com/search?q=${q}`;
+    case 'Depop':
+      return `https://www.depop.com/search/?q=${q}`;
+    case 'Poshmark':
+      return `https://poshmark.com/search?query=${q}`;
+    case 'Vinted':
+      return `https://www.vinted.com/catalog?search_text=${q}`;
+    case 'ThredUp':
+      return `https://www.thredup.com/products?search_tags=${q}`;
+    default:
+      return `https://www.google.com/search?q=${q}+thrift`;
+  }
+};
+
+MOCK_ITEMS.forEach((item, index) => {
+  const rotatedPlatform = PLATFORM_ROTATION[index % PLATFORM_ROTATION.length];
+  item.platform = item.platform === 'Local Thrift' ? item.platform : rotatedPlatform;
+  item.region = REGION_BY_PLATFORM[item.platform];
+  item.productUrl = buildProductUrl(item.platform, item.title);
+});
 };
 
 export const MOCK_ITEMS: FashionItem[] = [

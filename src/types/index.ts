@@ -87,7 +87,18 @@ export type ItemCategory =
   | 'Accessories'
   | 'Bags';
 
-export type Platform = 'Depop' | 'Poshmark' | 'Vinted' | 'ThredUp' | 'Local Thrift';
+export type Platform =
+  | 'Depop'
+  | 'Poshmark'
+  | 'Vinted'
+  | 'ThredUp'
+  | 'Local Thrift'
+  | 'Myntra'
+  | 'Meesho'
+  | 'Amazon'
+  | 'Flipkart';
+
+export type Region = 'Global' | 'India' | 'US' | 'EU';
 
 export interface FashionItem {
   id: string;
@@ -105,6 +116,8 @@ export interface FashionItem {
   size: string;
   brand: string;
   platform: Platform;
+  region?: Region;
+  productUrl?: string;
   sustainabilityScore: number; // 0-100
   co2Saved: number; // kg
   matchScore: number; // 0-100 relevance to user
@@ -186,6 +199,7 @@ export interface SustainabilityMetrics {
 export type RootTabParamList = {
   Discover: undefined;
   Profiler: undefined;
+  Compose: undefined;
   Prices: undefined;
   Quests: undefined;
   Profile: undefined;

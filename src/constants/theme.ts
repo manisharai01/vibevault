@@ -111,4 +111,8 @@ export const PLATFORM_COLORS: Record<string, string> = {
   Vinted: '#09B1BA',
   ThredUp: '#3D9B35',
   'Local Thrift': '#FF9F43',
+  Myntra: '#FF3F6C',
+  Meesho: '#6E38E0',
+  Amazon: '#FF9900',
+  Flipkart: '#2874F0',
 };

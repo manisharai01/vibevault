@@ -17,10 +17,12 @@ import QuestsScreen from '../screens/QuestsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import ItemDetailScreen from '../screens/ItemDetailScreen';
 import WishlistScreen from '../screens/WishlistScreen';
+import ComposerScreen from '../screens/ComposerScreen';
 
 const DiscoverStack = createNativeStackNavigator();
 const PriceStack = createNativeStackNavigator();
 const ProfileStack = createNativeStackNavigator();
+const ComposeStack = createNativeStackNavigator();
 
 const stackScreenOptions = {
   headerShown: false,
@@ -54,14 +56,24 @@ function ProfileStackNav() {
   );
 }
 
+function ComposeStackNav() {
+  return (
+    <ComposeStack.Navigator screenOptions={stackScreenOptions}>
+      <ComposeStack.Screen name="ComposeMain" component={ComposerScreen} />
+      <ComposeStack.Screen name="ItemDetail" component={ItemDetailScreen as any} />
+    </ComposeStack.Navigator>
+  );
+}
+
 const Tab = createBottomTabNavigator();
 
 const TAB_ICONS: Record<string, string> = {
-  Discover: '✨',
-  Profiler: '🎭',
-  Prices: '💰',
-  Quests: '⚔️',
-  Profile: '👤',
+  Discover: '◍',
+  Profiler: '◈',
+  Compose: '▦',
+  Prices: '◔',
+  Quests: '◉',
+  Profile: '◎',
 };
 
 export default function AppNavigator() {
@@ -75,7 +87,7 @@ export default function AppNavigator() {
         tabBarLabelStyle: styles.tabLabel,
         tabBarIcon: ({ focused }) => (
           <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
-            <Text style={styles.icon}>{TAB_ICONS[route.name]}</Text>
+            <Text style={[styles.icon, focused && styles.iconActive]}>{TAB_ICONS[route.name]}</Text>
           </View>
         ),
       })}
@@ -83,6 +95,7 @@ export default function AppNavigator() {
     >
       <Tab.Screen name="Discover" component={DiscoverStackNav} options={{ tabBarLabel: 'Discover' }} />
       <Tab.Screen name="Profiler" component={ProfilerScreen} options={{ tabBarLabel: 'My Vibe' }} />
+      <Tab.Screen name="Compose" component={ComposeStackNav} options={{ tabBarLabel: 'Compose' }} />
       <Tab.Screen name="Prices" component={PriceStackNav} options={{ tabBarLabel: 'Deals' }} />
       <Tab.Screen name="Quests" component={QuestsScreen} options={{ tabBarLabel: 'Quests' }} />
       <Tab.Screen name="Profile" component={ProfileStackNav} options={{ tabBarLabel: 'Profile' }} />
@@ -111,9 +124,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   iconContainerActive: {
-    backgroundColor: Colors.primary + '30',
+    backgroundColor: Colors.primary + '25',
   },
-  icon: {
-    fontSize: 20,
-  },
+  icon: { fontSize: 18, color: Colors.textMuted, fontWeight: '700' },
+  iconActive: { color: Colors.primaryLight },
 });

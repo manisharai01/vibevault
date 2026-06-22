@@ -28,12 +28,14 @@ import {
   PLATFORM_COLORS,
 } from '../constants/theme';
 import { useStore } from '../store/useStore';
-import { FashionItem, ItemCategory, StyleArchetype } from '../types';
+import { FashionItem, ItemCategory, Platform, Region } from '../types';
 import Tag from '../components/common/Tag';
 import ScoreBadge from '../components/common/ScoreBadge';
 import { getDealScore } from '../services/priceEngine';
 
 const CATEGORIES: (ItemCategory | 'All')[] = ['All', 'Tops', 'Bottoms', 'Dresses', 'Outerwear', 'Shoes', 'Accessories', 'Bags'];
+const PLATFORMS: Array<'All' | Platform> = ['All', 'Myntra', 'Meesho', 'Amazon', 'Flipkart', 'Depop', 'Poshmark', 'Vinted', 'ThredUp', 'Local Thrift'];
+const REGIONS: Array<'All' | Region> = ['All', 'India', 'US', 'EU', 'Global'];
 
 export default function DiscoverScreen({ navigation }: any) {
   const { recommendedItems, profile, isProfileComplete, toggleWishlist, vibeSummary } = useStore();
@@ -41,6 +43,8 @@ export default function DiscoverScreen({ navigation }: any) {
   const [searchQuery, setSearchQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [sortBy, setSortBy] = useState<'match' | 'price' | 'sustainability' | 'deal'>('match');
+  const [selectedPlatform, setSelectedPlatform] = useState<'All' | Platform>('All');
+  const [selectedRegion, setSelectedRegion] = useState<'All' | Region>('All');
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -51,6 +55,8 @@ export default function DiscoverScreen({ navigation }: any) {
   const filteredItems = recommendedItems
     .filter((item) => {
       if (selectedCategory !== 'All' && item.category !== selectedCategory) return false;
+      if (selectedPlatform !== 'All' && item.platform !== selectedPlatform) return false;
+      if (selectedRegion !== 'All' && item.region !== selectedRegion) return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
         return (
@@ -183,7 +189,7 @@ export default function DiscoverScreen({ navigation }: any) {
     <View style={styles.container}>
       {/* Header */}
       <LinearGradient colors={[Colors.primaryDark, Colors.background]} style={styles.header}>
-        <Text style={styles.headerTitle}>✨ Discover</Text>
+        <Text style={styles.headerTitle}>Discover</Text>
         {isProfileComplete && vibeSummary ? (
           <Text style={styles.headerSub} numberOfLines={2}>{vibeSummary}</Text>
         ) : (
@@ -192,7 +198,7 @@ export default function DiscoverScreen({ navigation }: any) {
 
         {/* Search */}
         <View style={styles.searchContainer}>
-          <Text style={styles.searchIcon}>🔍</Text>
+          <Text style={styles.searchIcon}>⌕</Text>
           <TextInput
             style={styles.searchInput}
             placeholder="Search brands, styles, items..."
@@ -223,13 +229,53 @@ export default function DiscoverScreen({ navigation }: any) {
         )}
       />
 
+      {/* Platform Filters */}
+      <FlatList
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        data={PLATFORMS}
+        keyExtractor={(item) => `platform-${item}`}
+        style={styles.categoryList}
+        contentContainerStyle={styles.categoryContent}
+        renderItem={({ item: platform }) => (
+          <TouchableOpacity
+            style={[styles.categoryChip, selectedPlatform === platform && styles.categoryChipActive]}
+            onPress={() => setSelectedPlatform(platform)}
+          >
+            <Text style={[styles.categoryText, selectedPlatform === platform && styles.categoryTextActive]}>
+              {platform}
+            </Text>
+          </TouchableOpacity>
+        )}
+      />
+
+      {/* Region Filters */}
+      <FlatList
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        data={REGIONS}
+        keyExtractor={(item) => `region-${item}`}
+        style={styles.categoryList}
+        contentContainerStyle={styles.categoryContent}
+        renderItem={({ item: region }) => (
+          <TouchableOpacity
+            style={[styles.categoryChip, selectedRegion === region && styles.categoryChipActive]}
+            onPress={() => setSelectedRegion(region)}
+          >
+            <Text style={[styles.categoryText, selectedRegion === region && styles.categoryTextActive]}>
+              {region}
+            </Text>
+          </TouchableOpacity>
+        )}
+      />
+
       {/* Sort buttons */}
       <View style={styles.sortRow}>
         {([
-          { key: 'match', label: '🎯 Match', },
-          { key: 'price', label: '💰 Price' },
-          { key: 'sustainability', label: '🌿 Eco' },
-          { key: 'deal', label: '🔥 Deal' },
+          { key: 'match', label: 'Match' },
+          { key: 'price', label: 'Price' },
+          { key: 'sustainability', label: 'Eco' },
+          { key: 'deal', label: 'Deal Score' },
         ] as const).map((s) => (
           <TouchableOpacity
             key={s.key}
@@ -254,7 +300,7 @@ export default function DiscoverScreen({ navigation }: any) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />}
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Text style={styles.emptyEmoji}>🔍</Text>
+              <Text style={styles.emptyEmoji}>⌕</Text>
             <Text style={styles.emptyText}>No items match your filters</Text>
             <Text style={styles.emptyHint}>Try adjusting your search or category</Text>
           </View>

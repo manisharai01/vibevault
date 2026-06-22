@@ -3,6 +3,8 @@
 // ============================================================
 
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   UserProfile,
   FashionItem,
@@ -70,13 +72,13 @@ const DEFAULT_PROFILE: UserProfile = {
   xp: 0,
   xpToNext: 100,
   points: 0,
-  badges: [MOCK_BADGES[0], MOCK_BADGES[2], MOCK_BADGES[7], MOCK_BADGES[9]],
-  completedQuests: ['quest-008'],
+  badges: [],
+  completedQuests: [],
   wishlist: [],
   joinedDate: '2026-02-01',
 };
 
-export const useStore = create<AppState>((set, get) => ({
+export const useStore = create<AppState>()(persist((set, get) => ({
   // ---- Initial state ----
   profile: DEFAULT_PROFILE,
   isProfileComplete: false,
@@ -89,11 +91,11 @@ export const useStore = create<AppState>((set, get) => ({
   badges: MOCK_BADGES,
   leaderboard: MOCK_LEADERBOARD,
   sustainability: {
-    totalCO2Saved: 62.4,
-    itemsThrifted: 8,
-    fastFashionAvoided: 12,
-    moneysSaved: 245.5,
-    treesEquivalent: 3,
+    totalCO2Saved: 0,
+    itemsThrifted: 0,
+    fastFashionAvoided: 0,
+    moneysSaved: 0,
+    treesEquivalent: 0,
   },
 
   // ---- Actions ----
@@ -198,6 +200,14 @@ export const useStore = create<AppState>((set, get) => ({
       return {
         quests,
         profile: { ...state.profile, completedQuests, badges },
+        sustainability: {
+          ...state.sustainability,
+          itemsThrifted: state.sustainability.itemsThrifted + 1,
+          fastFashionAvoided: state.sustainability.fastFashionAvoided + 1,
+          totalCO2Saved: Math.round((state.sustainability.totalCO2Saved + 2.8) * 10) / 10,
+          moneysSaved: Math.round((state.sustainability.moneysSaved + 18) * 100) / 100,
+          treesEquivalent: Math.round(((state.sustainability.totalCO2Saved + 2.8) / 21) * 100) / 100,
+        },
       };
     });
 
@@ -227,4 +237,18 @@ export const useStore = create<AppState>((set, get) => ({
       profile: { ...state.profile, points: state.profile.points + amount },
     }));
   },
+}), {
+  name: 'vibevault-store-v1',
+  storage: createJSONStorage(() => AsyncStorage),
+  partialize: (state) => ({
+    profile: state.profile,
+    isProfileComplete: state.isProfileComplete,
+    vibeSummary: state.vibeSummary,
+    allItems: state.allItems,
+    recommendedItems: state.recommendedItems,
+    wishlistItems: state.wishlistItems,
+    priceAlerts: state.priceAlerts,
+    quests: state.quests,
+    sustainability: state.sustainability,
+  }),
 }));
