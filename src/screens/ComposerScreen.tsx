@@ -1,96 +1,163 @@
+// ============================================================
+// VibeVault – Wardrobe Composer
+// Builds complete outfits, preferring wishlist pieces for each
+// slot and filling gaps with personalised recommendations.
+// ============================================================
+
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Colors, Spacing, FontSize, BorderRadius } from '../constants/theme';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { CompositeNavigationProp, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import { useShallow } from 'zustand/react/shallow';
+import { BorderRadius, Colors, FontSize, Spacing } from '../constants/theme';
+import { STYLE_ARCHETYPES } from '../constants/marketplaces';
 import { useStore } from '../store/useStore';
 import { FashionItem, StyleArchetype } from '../types';
+import { ComposeStackParamList, RootTabParamList } from '../navigation/types';
+import ChipRow from '../components/common/ChipRow';
+import EmptyState from '../components/common/EmptyState';
 import GradientCard from '../components/common/GradientCard';
+import ProductImage from '../components/common/ProductImage';
+import ScreenHeader from '../components/common/ScreenHeader';
+import { composeLook, LookSlot, SLOT_LABELS } from '../services/composer';
+import { hashString } from '../utils/random';
+import { formatPrice } from '../utils/format';
+import { notify } from '../utils/dialog';
+import { shareText } from '../utils/share';
 
-const STYLE_FILTERS: Array<'All' | StyleArchetype> = [
-  'All',
-  'Minimalist',
-  'Streetwear',
-  'Bohemian',
-  'Vintage',
-  'Athleisure',
-  'Preppy',
-  'Grunge',
-  'Cottagecore',
-  'Dark Academia',
-  'Y2K',
-];
+type Nav = CompositeNavigationProp<
+  NativeStackNavigationProp<ComposeStackParamList, 'ComposeMain'>,
+  BottomTabNavigationProp<RootTabParamList>
+>;
 
-const pick = (items: FashionItem[]) => items[Math.floor(Math.random() * items.length)];
+const STYLE_OPTIONS: ('All' | StyleArchetype)[] = ['All', ...STYLE_ARCHETYPES];
 
-export default function ComposerScreen({ navigation }: { navigation: any }) {
-  const { wishlistItems, recommendedItems } = useStore();
+export default function ComposerScreen() {
+  const navigation = useNavigation<Nav>();
+  const { recommendedItems, wishlist, topStyle } = useStore(
+    useShallow((s) => ({
+      recommendedItems: s.recommendedItems,
+      wishlist: s.profile.wishlist,
+      topStyle: s.profile.styleArchetypes[0],
+    })),
+  );
   const [styleFilter, setStyleFilter] = useState<'All' | StyleArchetype>('All');
+  const [shuffle, setShuffle] = useState(0);
 
-  const sourceItems = wishlistItems.length > 0 ? wishlistItems : recommendedItems;
+  const wishlistSet = useMemo(() => new Set(wishlist), [wishlist]);
+  const candidates = useMemo(
+    () => (styleFilter === 'All' ? recommendedItems : recommendedItems.filter((i) => i.styleArchetypes.includes(styleFilter))),
+    [recommendedItems, styleFilter],
+  );
+  const look = useMemo(
+    () => composeLook(candidates, wishlistSet, hashString(`${styleFilter}:${shuffle}`)),
+    [candidates, wishlistSet, styleFilter, shuffle],
+  );
 
-  const filtered = useMemo(() => {
-    if (styleFilter === 'All') return sourceItems;
-    return sourceItems.filter((i) => i.styleArchetypes.includes(styleFilter));
-  }, [sourceItems, styleFilter]);
+  const pieces = look.filter((slot): slot is LookSlot & { item: FashionItem } => slot.item !== null);
+  const total = pieces.reduce((sum, slot) => sum + slot.item.currentPrice, 0);
+  const fromWishlist = pieces.filter((slot) => slot.fromWishlist).length;
 
-  const tops = filtered.filter((i) => i.category === 'Tops');
-  const bottoms = filtered.filter((i) => i.category === 'Bottoms' || i.category === 'Dresses');
-  const outerwear = filtered.filter((i) => i.category === 'Outerwear');
-  const shoes = filtered.filter((i) => i.category === 'Shoes');
-  const accessories = filtered.filter((i) => i.category === 'Accessories' || i.category === 'Bags');
-
-  const look = useMemo(() => {
-    return {
-      top: tops.length ? pick(tops) : undefined,
-      bottom: bottoms.length ? pick(bottoms) : undefined,
-      layer: outerwear.length ? pick(outerwear) : undefined,
-      shoes: shoes.length ? pick(shoes) : undefined,
-      accessory: accessories.length ? pick(accessories) : undefined,
-    };
-  }, [filtered]);
-
-  const lookItems = [look.top, look.bottom, look.layer, look.shoes, look.accessory].filter(Boolean) as FashionItem[];
-  const total = lookItems.reduce((sum, i) => sum + i.currentPrice, 0);
+  const handleShare = async () => {
+    const lines = pieces.map((slot) => `• ${SLOT_LABELS[slot.key]}: ${slot.item.title} — ${formatPrice(slot.item.currentPrice)} on ${slot.item.platform}`);
+    const message = `My VibeVault look${styleFilter !== 'All' ? ` (${styleFilter})` : ''}:\n${lines.join('\n')}\nTotal: ${formatPrice(total)}`;
+    const result = await shareText('My VibeVault look', message);
+    if (result === 'copied') notify('Copied!', 'Your look has been copied to the clipboard.');
+    if (result === 'unavailable') notify('Sharing unavailable', 'Sharing is not supported on this device.');
+  };
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 120 }}>
-      <LinearGradient colors={[Colors.primaryDark, Colors.background]} style={styles.header}>
-        <Text style={styles.title}>Wardrobe Composer</Text>
-        <Text style={styles.subtitle}>Build complete looks from your saved and recommended pieces.</Text>
-      </LinearGradient>
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: Spacing.xxl }}>
+      <ScreenHeader
+        title="Wardrobe Composer"
+        subtitle={`Complete looks built from your saved pieces${topStyle ? ` and ${topStyle} picks` : ' and recommendations'}.`}
+      />
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterRow}>
-        {STYLE_FILTERS.map((f) => (
-          <TouchableOpacity
-            key={f}
-            style={[styles.filterChip, styleFilter === f && styles.filterChipActive]}
-            onPress={() => setStyleFilter(f)}
-          >
-            <Text style={[styles.filterText, styleFilter === f && styles.filterTextActive]}>{f}</Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+      <ChipRow options={STYLE_OPTIONS} selected={styleFilter} onSelect={setStyleFilter} accessibilityLabel="Style" compact />
 
-      <GradientCard style={styles.summaryCard}>
-        <Text style={styles.sectionTitle}>Current Look</Text>
-        <Text style={styles.summaryText}>{lookItems.length} pieces · ${total.toFixed(2)} estimated total</Text>
-      </GradientCard>
-
-      {lookItems.length === 0 ? (
-        <GradientCard style={styles.emptyCard}>
-          <Text style={styles.emptyText}>Not enough items to compose a look yet. Save more items in Discover.</Text>
-        </GradientCard>
+      {pieces.length === 0 ? (
+        <EmptyState
+          icon="shirt-outline"
+          title="No pieces for this style yet"
+          message="Try another style, or save more items from Discover."
+          actionLabel="Browse Discover"
+          onAction={() => navigation.navigate('Discover')}
+        />
       ) : (
-        lookItems.map((item) => (
-          <TouchableOpacity key={item.id} style={styles.itemCard} onPress={() => navigation.navigate('ItemDetail', { item })}>
-            <Image source={{ uri: item.image }} style={styles.itemImage} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
-              <Text style={styles.itemMeta}>{item.category} · {item.platform}</Text>
-              <Text style={styles.itemPrice}>${item.currentPrice.toFixed(2)}</Text>
+        <>
+          <GradientCard style={styles.summaryCard}>
+            <View style={styles.summaryRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sectionTitle}>Current Look</Text>
+                <Text style={styles.summaryText}>
+                  {pieces.length} {pieces.length === 1 ? 'piece' : 'pieces'} · {formatPrice(total)} total
+                </Text>
+                <Text style={styles.summaryMeta}>
+                  {fromWishlist > 0 ? `${fromWishlist} from your wishlist` : 'Save items to see them here first'}
+                </Text>
+              </View>
             </View>
+            <View style={styles.actionRow}>
+              <TouchableOpacity
+                style={styles.actionBtn}
+                onPress={() => setShuffle((n) => n + 1)}
+                accessibilityRole="button"
+                accessibilityLabel="Shuffle look"
+              >
+                <Ionicons name="shuffle" size={16} color={Colors.primaryLight} />
+                <Text style={styles.actionText}>Shuffle</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.actionBtn} onPress={handleShare} accessibilityRole="button" accessibilityLabel="Share look">
+                <Ionicons name="share-outline" size={16} color={Colors.primaryLight} />
+                <Text style={styles.actionText}>Share</Text>
+              </TouchableOpacity>
+            </View>
+          </GradientCard>
+
+          {look.map((slot) =>
+            slot.item ? (
+              <TouchableOpacity
+                key={slot.key}
+                style={styles.itemCard}
+                onPress={() => navigation.navigate('ItemDetail', { itemId: slot.item!.id })}
+                accessibilityRole="button"
+                accessibilityLabel={`${SLOT_LABELS[slot.key]}: ${slot.item.title}, ${formatPrice(slot.item.currentPrice)}`}
+              >
+                <ProductImage uri={slot.item.image} style={styles.itemImage} category={slot.item.category} colors={slot.item.colors} iconSize={20} />
+                <View style={{ flex: 1 }}>
+                  <View style={styles.slotRow}>
+                    <Text style={styles.slotLabel}>{SLOT_LABELS[slot.key]}</Text>
+                    {slot.fromWishlist && <Text style={styles.savedBadge}>❤️ Saved</Text>}
+                  </View>
+                  <Text style={styles.itemTitle} numberOfLines={1}>
+                    {slot.item.title}
+                  </Text>
+                  <Text style={styles.itemMeta}>
+                    {slot.item.platform} · {slot.item.condition}
+                  </Text>
+                  <Text style={styles.itemPrice}>{formatPrice(slot.item.currentPrice)}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+              </TouchableOpacity>
+            ) : (
+              <View key={slot.key} style={[styles.itemCard, styles.emptySlot]}>
+                <Ionicons name="add-circle-outline" size={22} color={Colors.textMuted} />
+                <Text style={styles.emptySlotText}>
+                  No {SLOT_LABELS[slot.key].toLowerCase()} matches {styleFilter === 'All' ? 'yet' : `the ${styleFilter} style yet`}
+                </Text>
+              </View>
+            ),
+          )}
+
+          <TouchableOpacity onPress={() => setShuffle((n) => n + 1)} activeOpacity={0.85} style={styles.bigShuffle} accessibilityRole="button">
+            <LinearGradient colors={Colors.gradientPrimary} style={styles.bigShuffleInner}>
+              <Text style={styles.bigShuffleText}>🔀 Compose Another Look</Text>
+            </LinearGradient>
           </TouchableOpacity>
-        ))
+        </>
       )}
     </ScrollView>
   );
@@ -98,11 +165,16 @@ export default function ComposerScreen({ navigation }: { navigation: any }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { paddingTop: 56, paddingHorizontal: Spacing.xl, paddingBottom: Spacing.lg },
-  title: { color: Colors.textPrimary, fontSize: FontSize.xxl, fontWeight: '800' },
-  subtitle: { color: Colors.textSecondary, marginTop: 6, fontSize: FontSize.sm },
-  filterRow: { gap: Spacing.sm, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
-  filterChip: {
+  summaryCard: { marginHorizontal: Spacing.lg, marginTop: Spacing.md, marginBottom: Spacing.md },
+  summaryRow: { flexDirection: 'row', alignItems: 'center' },
+  sectionTitle: { color: Colors.textPrimary, fontSize: FontSize.lg, fontWeight: '700' },
+  summaryText: { color: Colors.textSecondary, marginTop: 6, fontSize: FontSize.md },
+  summaryMeta: { color: Colors.textMuted, marginTop: 2, fontSize: FontSize.xs },
+  actionRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.md },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.sm,
     borderRadius: BorderRadius.full,
@@ -110,14 +182,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     backgroundColor: Colors.surface,
   },
-  filterChipActive: { borderColor: Colors.primary, backgroundColor: Colors.primaryDark },
-  filterText: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '700' },
-  filterTextActive: { color: Colors.primaryLight },
-  summaryCard: { marginHorizontal: Spacing.lg, marginBottom: Spacing.md },
-  sectionTitle: { color: Colors.textPrimary, fontSize: FontSize.lg, fontWeight: '700' },
-  summaryText: { color: Colors.textSecondary, marginTop: 6 },
-  emptyCard: { marginHorizontal: Spacing.lg },
-  emptyText: { color: Colors.textSecondary, lineHeight: 20 },
+  actionText: { color: Colors.primaryLight, fontSize: FontSize.sm, fontWeight: '700' },
   itemCard: {
     marginHorizontal: Spacing.lg,
     marginBottom: Spacing.sm,
@@ -130,8 +195,16 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     alignItems: 'center',
   },
-  itemImage: { width: 64, height: 64, borderRadius: BorderRadius.sm, backgroundColor: Colors.surface },
-  itemTitle: { color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: '700' },
+  emptySlot: { borderStyle: 'dashed', backgroundColor: 'transparent' },
+  emptySlotText: { flex: 1, color: Colors.textMuted, fontSize: FontSize.sm },
+  itemImage: { width: 64, height: 64, borderRadius: BorderRadius.sm },
+  slotRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  slotLabel: { color: Colors.primaryLight, fontSize: FontSize.xs, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8 },
+  savedBadge: { color: Colors.accent, fontSize: FontSize.xs, fontWeight: '700' },
+  itemTitle: { color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: '700', marginTop: 2 },
   itemMeta: { color: Colors.textMuted, marginTop: 2, fontSize: FontSize.xs },
-  itemPrice: { color: Colors.success, marginTop: 6, fontWeight: '800' },
+  itemPrice: { color: Colors.success, marginTop: 4, fontWeight: '800' },
+  bigShuffle: { marginHorizontal: Spacing.lg, marginTop: Spacing.md, borderRadius: BorderRadius.md, overflow: 'hidden' },
+  bigShuffleInner: { paddingVertical: Spacing.md, alignItems: 'center' },
+  bigShuffleText: { color: '#FFF', fontSize: FontSize.md, fontWeight: '800' },
 });

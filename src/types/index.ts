@@ -46,32 +46,48 @@ export type StyleArchetype =
   | 'Dark Academia'
   | 'Y2K';
 
+export type BudgetTier = 'budget-low' | 'budget-mid' | 'budget-high' | 'budget-premium';
+
 export interface ProfileQuestion {
   id: string;
   question: string;
   type: 'single' | 'multi' | 'slider';
-  options?: { label: string; value: string; icon?: string }[];
+  options?: { label: string; value: string }[];
   min?: number;
   max?: number;
+  step?: number;
+  minLabel?: string;
+  maxLabel?: string;
 }
+
+/** Raw answers captured by the Style Profiler, keyed by question id. */
+export type ProfilerAnswers = Record<string, string | string[] | number>;
+
+/** Normalised (0–100) affinity per style archetype. */
+export type StyleScores = Partial<Record<StyleArchetype, number>>;
 
 export interface UserProfile {
   id: string;
   name: string;
-  avatar?: string;
   personalityTraits: PersonalityDimension[];
   musicGenres: MusicGenre[];
   mediaPreferences: MediaPreference[];
+  /** Top archetypes, strongest first. */
   styleArchetypes: StyleArchetype[];
+  styleScores: StyleScores;
   vibeScore: number; // 0-100
-  level: number;
-  xp: number;
-  xpToNext: number;
+  budgetTier: BudgetTier | null;
+  sustainabilityPriority: number; // 0-100
+  profilerAnswers: ProfilerAnswers;
+  /** Lifetime XP; level is derived from it. */
+  totalXP: number;
   points: number;
-  badges: Badge[];
+  /** badgeId -> date earned (YYYY-MM-DD) */
+  earnedBadges: Record<string, string>;
   completedQuests: string[];
+  /** Wishlisted item ids, most recently saved first. */
   wishlist: string[];
-  joinedDate: string;
+  joinedDate: string; // YYYY-MM-DD
 }
 
 // ---- Fashion Items ----
@@ -100,88 +116,141 @@ export type Platform =
 
 export type Region = 'Global' | 'India' | 'US' | 'EU';
 
-export interface FashionItem {
+export interface PricePoint {
+  date: string; // YYYY-MM-DD
+  price: number;
+}
+
+/** Static listing data. Prices are simulated around `basePrice`. */
+export interface CatalogSeedItem {
   id: string;
   title: string;
   description: string;
   image: string;
   category: ItemCategory;
   styleArchetypes: StyleArchetype[];
-  currentPrice: number;
+  basePrice: number;
   originalPrice: number;
-  predictedPrice7d: number;
-  predictedPrice30d: number;
-  priceHistory: PricePoint[];
   condition: ItemCondition;
   size: string;
   brand: string;
   platform: Platform;
-  region?: Region;
-  productUrl?: string;
   sustainabilityScore: number; // 0-100
   co2Saved: number; // kg
-  matchScore: number; // 0-100 relevance to user
-  distance?: number; // km from user
+  /** Distance in km — only meaningful for in-person (Local Thrift) listings. */
+  distance?: number;
   seller: string;
-  listedDate: string;
+  listedDate: string; // YYYY-MM-DD
   colors: string[];
 }
 
-export interface PricePoint {
-  date: string;
-  price: number;
+export interface FashionItem extends Omit<CatalogSeedItem, 'basePrice'> {
+  region: Region;
+  productUrl: string;
+  currentPrice: number;
+  predictedPrice7d: number;
+  predictedPrice30d: number;
+  priceHistory: PricePoint[];
+  /** 0-100 relevance to the user (0 until the Style Profile is complete). */
+  matchScore: number;
 }
+
+export type PriceAlertStatus = 'active' | 'triggered';
 
 export interface PriceAlert {
   id: string;
   itemId: string;
   targetPrice: number;
-  currentPrice: number;
-  active: boolean;
-  createdAt: string;
+  priceAtCreation: number;
+  createdAt: string; // ISO timestamp
+  status: PriceAlertStatus;
+  triggeredAt?: string; // ISO timestamp
+  triggeredPrice?: number;
+  /** Whether the user has seen a triggered alert in the Alerts list. */
+  acknowledged: boolean;
+}
+
+export interface Purchase {
+  id: string;
+  itemId: string;
+  title: string;
+  platform: Platform;
+  pricePaid: number;
+  originalPrice: number;
+  co2Saved: number;
+  purchasedAt: string; // ISO timestamp
 }
 
 // ---- Gamification ----
 
 export type QuestDifficulty = 'Easy' | 'Medium' | 'Hard' | 'Epic';
 export type QuestStatus = 'available' | 'in-progress' | 'completed' | 'expired';
+export type QuestType = 'mood-board' | 'styling-challenge' | 'thrift-hunt' | 'sustainability' | 'community';
 
-export interface Quest {
+/** Shortcut offered on a quest's detail screen. */
+export type QuestHelperAction = 'find-thrift-stores' | 'open-composer' | 'open-deals' | 'open-profiler';
+
+export interface QuestDefinition {
   id: string;
   title: string;
   description: string;
-  type: 'mood-board' | 'styling-challenge' | 'thrift-hunt' | 'sustainability' | 'community';
+  type: QuestType;
   difficulty: QuestDifficulty;
   xpReward: number;
   pointsReward: number;
-  badgeReward?: string;
+  badgeId?: string;
+  /** One entry per step; the quest has steps.length steps. */
+  steps: string[];
+  /** Time limit once started, in days. */
+  durationDays?: number;
+  helperAction?: QuestHelperAction;
+  icon: string;
+}
+
+/** Persisted per-quest progress (absent = available). */
+export interface QuestProgress {
+  status: Exclude<QuestStatus, 'available'>;
+  completedSteps: number;
+  startedAt: string; // ISO timestamp
+  deadline?: string; // ISO timestamp
+  completedAt?: string; // ISO timestamp
+}
+
+/** A quest definition merged with the user's progress. */
+export interface Quest extends QuestDefinition {
   status: QuestStatus;
   progress: number; // 0-100
   totalSteps: number;
   completedSteps: number;
+  startedAt?: string;
   deadline?: string;
-  city?: string;
-  requirements: string[];
-  icon: string;
+  completedAt?: string;
 }
+
+export type BadgeRarity = 'common' | 'rare' | 'epic' | 'legendary';
 
 export interface Badge {
   id: string;
   name: string;
   description: string;
   icon: string;
-  earnedDate?: string;
-  rarity: 'common' | 'rare' | 'epic' | 'legendary';
+  rarity: BadgeRarity;
 }
 
 export interface LeaderboardEntry {
   rank: number;
   userId: string;
   name: string;
-  avatar?: string;
   points: number;
   level: number;
-  styleArchetype: StyleArchetype;
+  styleArchetype: StyleArchetype | null;
+  isCurrentUser?: boolean;
+}
+
+export interface StreakState {
+  lastActiveDate: string | null; // YYYY-MM-DD
+  current: number;
+  longest: number;
 }
 
 // ---- Sustainability ----
@@ -189,18 +258,7 @@ export interface LeaderboardEntry {
 export interface SustainabilityMetrics {
   totalCO2Saved: number;
   itemsThrifted: number;
-  fastFashionAvoided: number;
-  moneysSaved: number;
+  waterSavedLiters: number;
+  moneySaved: number;
   treesEquivalent: number;
 }
-
-// ---- Navigation ----
-
-export type RootTabParamList = {
-  Discover: undefined;
-  Profiler: undefined;
-  Compose: undefined;
-  Prices: undefined;
-  Quests: undefined;
-  Profile: undefined;
-};

@@ -1,20 +1,27 @@
 {
   "expo": {
-    "name": "vibevault",
+    "name": "VibeVault",
     "slug": "vibevault",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "scheme": "vibevault",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0F0F1A",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0F0F1A"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.vibevault.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.vibevault.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -24,7 +31,11 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "name": "VibeVault",
+      "shortName": "VibeVault",
+      "themeColor": "#0F0F1A",
+      "backgroundColor": "#0F0F1A"
     }
   }
 }

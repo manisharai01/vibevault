@@ -1,12 +1,26 @@
 // ============================================================
 // VibeVault – Style Profiler Questions
+// Every answer feeds the style engine (services/styleEngine.ts).
 // ============================================================
 
 import { ProfileQuestion } from '../types';
 
+export const QUESTION_IDS = {
+  personality: 'q1_personality',
+  thinking: 'q2_thinking',
+  music: 'q3_music',
+  media: 'q4_media',
+  palette: 'q5_color',
+  weekend: 'q6_weekend',
+  sustainability: 'q7_sustainability',
+  budget: 'q8_budget',
+} as const;
+
+export const DEFAULT_SUSTAINABILITY_ANSWER = 50;
+
 export const PROFILER_QUESTIONS: ProfileQuestion[] = [
   {
-    id: 'q1_personality',
+    id: QUESTION_IDS.personality,
     question: 'How would you describe your social energy?',
     type: 'single',
     options: [
@@ -16,7 +30,7 @@ export const PROFILER_QUESTIONS: ProfileQuestion[] = [
     ],
   },
   {
-    id: 'q2_thinking',
+    id: QUESTION_IDS.thinking,
     question: 'When making decisions, you tend to rely on…',
     type: 'single',
     options: [
@@ -27,7 +41,7 @@ export const PROFILER_QUESTIONS: ProfileQuestion[] = [
     ],
   },
   {
-    id: 'q3_music',
+    id: QUESTION_IDS.music,
     question: 'Select all music genres you enjoy:',
     type: 'multi',
     options: [
@@ -39,10 +53,12 @@ export const PROFILER_QUESTIONS: ProfileQuestion[] = [
       { label: '🎻 Classical', value: 'classical' },
       { label: '🌿 Indie', value: 'indie' },
       { label: '🎶 R&B', value: 'r&b' },
+      { label: '🤠 Country', value: 'country' },
+      { label: '🤘 Metal', value: 'metal' },
     ],
   },
   {
-    id: 'q4_media',
+    id: QUESTION_IDS.media,
     question: 'Your go-to movie/show genres:',
     type: 'multi',
     options: [
@@ -53,10 +69,11 @@ export const PROFILER_QUESTIONS: ProfileQuestion[] = [
       { label: '🌸 Anime', value: 'anime' },
       { label: '😂 Comedy', value: 'comedy' },
       { label: '🔪 Thriller', value: 'thriller' },
+      { label: '🎭 Drama', value: 'drama' },
     ],
   },
   {
-    id: 'q5_color',
+    id: QUESTION_IDS.palette,
     question: 'Which color palette speaks to you?',
     type: 'single',
     options: [
@@ -69,7 +86,7 @@ export const PROFILER_QUESTIONS: ProfileQuestion[] = [
     ],
   },
   {
-    id: 'q6_weekend',
+    id: QUESTION_IDS.weekend,
     question: 'Your ideal weekend activity?',
     type: 'single',
     options: [
@@ -82,14 +99,17 @@ export const PROFILER_QUESTIONS: ProfileQuestion[] = [
     ],
   },
   {
-    id: 'q7_sustainability',
+    id: QUESTION_IDS.sustainability,
     question: 'How important is sustainability to you?',
     type: 'slider',
     min: 0,
     max: 100,
+    step: 25,
+    minLabel: 'Not important',
+    maxLabel: 'Very important',
   },
   {
-    id: 'q8_budget',
+    id: QUESTION_IDS.budget,
     question: 'Your typical clothing budget per item?',
     type: 'single',
     options: [

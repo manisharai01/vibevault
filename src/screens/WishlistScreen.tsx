@@ -1,104 +1,112 @@
 // ============================================================
 // VibeVault – Wishlist Screen
-// Shows saved items with price change indicators and alerts.
+// Saved items with live prices, predicted drops and alerts.
 // ============================================================
 
-import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  Image,
-} from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Colors, Spacing, FontSize, BorderRadius, Shadows, STYLE_COLORS, PLATFORM_COLORS } from '../constants/theme';
+import React, { useCallback, useMemo } from 'react';
+import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { CompositeNavigationProp, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import { useShallow } from 'zustand/react/shallow';
+import { BorderRadius, Colors, FontSize, PLATFORM_COLORS, STYLE_COLORS, Shadows, Spacing } from '../constants/theme';
+import { useWishlistItems } from '../store/hooks';
 import { useStore } from '../store/useStore';
 import { FashionItem } from '../types';
+import { ProfileStackParamList, RootTabParamList } from '../navigation/types';
+import EmptyState from '../components/common/EmptyState';
+import ProductImage from '../components/common/ProductImage';
+import ScreenHeader from '../components/common/ScreenHeader';
 import Tag from '../components/common/Tag';
-import { getDealScore } from '../services/priceEngine';
+import { formatPrice, formatPriceRounded, percentOff } from '../utils/format';
 
-export default function WishlistScreen({ navigation }: any) {
-  const { wishlistItems, profile, toggleWishlist, priceAlerts } = useStore();
-  const insets = useSafeAreaInsets();
+type Nav = CompositeNavigationProp<
+  NativeStackNavigationProp<ProfileStackParamList, 'Wishlist'>,
+  BottomTabNavigationProp<RootTabParamList>
+>;
 
-  const totalSavings = wishlistItems.reduce(
-    (sum, item) => sum + (item.originalPrice - item.currentPrice),
-    0,
+export default function WishlistScreen() {
+  const navigation = useNavigation<Nav>();
+  const wishlistItems = useWishlistItems();
+  const { isProfileComplete, priceAlerts, toggleWishlist } = useStore(
+    useShallow((s) => ({ isProfileComplete: s.isProfileComplete, priceAlerts: s.priceAlerts, toggleWishlist: s.toggleWishlist })),
   );
-  const avgMatchScore =
-    wishlistItems.length > 0
-      ? Math.round(wishlistItems.reduce((s, i) => s + i.matchScore, 0) / wishlistItems.length)
-      : 0;
 
-  const renderItem = ({ item }: { item: FashionItem }) => {
-    const hasAlert = priceAlerts.some((a) => a.itemId === item.id && a.active);
-    const dealScore = getDealScore(item);
-    const savePct = Math.round((1 - item.currentPrice / item.originalPrice) * 100);
-    const priceDropSoon = item.predictedPrice7d < item.currentPrice;
+  const alertItemIds = useMemo(() => new Set(priceAlerts.filter((a) => a.status === 'active').map((a) => a.itemId)), [priceAlerts]);
+  const totalSavings = wishlistItems.reduce((sum, item) => sum + Math.max(0, item.originalPrice - item.currentPrice), 0);
+  const avgMatch =
+    wishlistItems.length > 0 ? Math.round(wishlistItems.reduce((sum, item) => sum + item.matchScore, 0) / wishlistItems.length) : 0;
 
-    return (
-      <TouchableOpacity
-        style={styles.card}
-        onPress={() => navigation.navigate('ItemDetail', { item })}
-        activeOpacity={0.85}
-      >
-        <Image source={{ uri: item.image }} style={styles.cardImage} resizeMode="cover" />
-        <View style={styles.cardInfo}>
-          <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
-          <Text style={styles.cardBrand}>{item.brand} · {item.condition}</Text>
-
-          <View style={styles.tagRow}>
-            {item.styleArchetypes.slice(0, 2).map((s) => (
-              <Tag key={s} label={s} color={STYLE_COLORS[s]} selected small />
-            ))}
-          </View>
-
-          <View style={styles.priceRow}>
-            <Text style={styles.price}>${item.currentPrice.toFixed(2)}</Text>
-            <Text style={styles.originalPrice}>${item.originalPrice.toFixed(2)}</Text>
-            {savePct > 0 && (
-              <View style={styles.saveBadge}>
-                <Text style={styles.saveText}>-{savePct}%</Text>
-              </View>
-            )}
-          </View>
-
-          {priceDropSoon && (
-            <Text style={styles.dropHint}>
-              📉 Drops to ${item.predictedPrice7d.toFixed(2)} in 7d
+  const renderItem = useCallback(
+    ({ item }: { item: FashionItem }) => {
+      const savePct = percentOff(item.currentPrice, item.originalPrice);
+      const dropsSoon = item.predictedPrice7d < item.currentPrice * 0.99;
+      return (
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => navigation.navigate('ItemDetail', { itemId: item.id })}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={`${item.title}, ${formatPrice(item.currentPrice)}`}
+          // Screen readers treat the card as one element, so expose Remove as an action.
+          accessibilityActions={[{ name: 'activate' }, { name: 'remove', label: 'Remove from wishlist' }]}
+          onAccessibilityAction={(event) => {
+            if (event.nativeEvent.actionName === 'remove') toggleWishlist(item.id);
+            else if (event.nativeEvent.actionName === 'activate') navigation.navigate('ItemDetail', { itemId: item.id });
+          }}
+        >
+          <ProductImage uri={item.image} style={styles.cardImage} category={item.category} colors={item.colors} />
+          <View style={styles.cardInfo}>
+            <Text style={styles.cardTitle} numberOfLines={2}>
+              {item.title}
             </Text>
-          )}
-
-          <View style={styles.cardBottom}>
-            <View
-              style={[styles.platformChip, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}
-            >
-              <Text style={styles.platformText}>{item.platform}</Text>
+            <Text style={styles.cardBrand}>
+              {item.brand} · {item.condition}
+            </Text>
+            <View style={styles.tagRow}>
+              {item.styleArchetypes.slice(0, 2).map((s) => (
+                <Tag key={s} label={s} color={STYLE_COLORS[s]} selected small />
+              ))}
             </View>
-            {hasAlert && (
-              <View style={styles.alertChip}>
-                <Text style={styles.alertChipText}>🔔 Alert on</Text>
+            <View style={styles.priceRow}>
+              <Text style={styles.price}>{formatPrice(item.currentPrice)}</Text>
+              <Text style={styles.originalPrice}>{formatPrice(item.originalPrice)}</Text>
+              {savePct > 0 && (
+                <View style={styles.saveBadge}>
+                  <Text style={styles.saveText}>-{savePct}%</Text>
+                </View>
+              )}
+            </View>
+            {dropsSoon && <Text style={styles.dropHint}>📉 Predicted {formatPrice(item.predictedPrice7d)} in 7 days</Text>}
+            <View style={styles.cardBottom}>
+              <View style={[styles.platformChip, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}>
+                <Text style={styles.platformText}>{item.platform}</Text>
               </View>
-            )}
-            <TouchableOpacity onPress={() => toggleWishlist(item.id)} style={styles.removeBtn}>
-              <Text style={styles.removeBtnText}>❌</Text>
-            </TouchableOpacity>
+              {alertItemIds.has(item.id) && (
+                <View style={styles.alertChip}>
+                  <Text style={styles.alertChipText}>🔔 Alert on</Text>
+                </View>
+              )}
+              <TouchableOpacity
+                onPress={() => toggleWishlist(item.id)}
+                style={styles.removeBtn}
+                accessibilityRole="button"
+                accessibilityLabel={`Remove ${item.title} from wishlist`}
+                hitSlop={10}
+              >
+                <Text style={styles.removeBtnText}>Remove</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </TouchableOpacity>
-    );
-  };
+        </TouchableOpacity>
+      );
+    },
+    [alertItemIds, navigation, toggleWishlist],
+  );
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
-      <LinearGradient colors={[Colors.primaryDark, Colors.background]} style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>❤️ Wishlist</Text>
+    <View style={styles.container}>
+      <ScreenHeader title="❤️ Wishlist" onBack={() => navigation.goBack()}>
         {wishlistItems.length > 0 && (
           <View style={styles.statsRow}>
             <View style={styles.stat}>
@@ -106,88 +114,46 @@ export default function WishlistScreen({ navigation }: any) {
               <Text style={styles.statLabel}>Saved</Text>
             </View>
             <View style={styles.stat}>
-              <Text style={styles.statValue}>${totalSavings.toFixed(0)}</Text>
-              <Text style={styles.statLabel}>Off Retail</Text>
+              <Text style={styles.statValue}>{formatPriceRounded(totalSavings)}</Text>
+              <Text style={styles.statLabel}>Off retail</Text>
             </View>
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{avgMatchScore}%</Text>
-              <Text style={styles.statLabel}>Avg Match</Text>
-            </View>
+            {isProfileComplete && (
+              <View style={styles.stat}>
+                <Text style={styles.statValue}>{avgMatch}%</Text>
+                <Text style={styles.statLabel}>Avg match</Text>
+              </View>
+            )}
           </View>
         )}
-      </LinearGradient>
+      </ScreenHeader>
 
-      {wishlistItems.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyIcon}>🤍</Text>
-          <Text style={styles.emptyTitle}>No saved items yet</Text>
-          <Text style={styles.emptyDesc}>
-            Tap the heart icon on any item in the Discover feed to save it here.
-          </Text>
-          <TouchableOpacity onPress={() => navigation.goBack()} activeOpacity={0.8}>
-            <LinearGradient colors={Colors.gradientPrimary as [string, string]} style={styles.browseBtn}>
-              <Text style={styles.browseBtnText}>✨ Browse Discover</Text>
-            </LinearGradient>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <FlatList
-          data={wishlistItems}
-          renderItem={renderItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+      <FlatList
+        data={wishlistItems}
+        renderItem={renderItem}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.list}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <EmptyState
+            icon="heart-outline"
+            title="No saved items yet"
+            message="Tap the heart on any item in Discover to save it here and track its price."
+            actionLabel="✨ Browse Discover"
+            onAction={() => navigation.navigate('Discover', { screen: 'DiscoverFeed', pop: true })}
+          />
+        }
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  header: {
-    paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.xl,
-    paddingTop: Spacing.md,
-  },
-  backBtn: {
-    marginBottom: Spacing.sm,
-  },
-  backText: {
-    color: Colors.primaryLight,
-    fontSize: FontSize.md,
-    fontWeight: '600',
-  },
-  headerTitle: {
-    color: Colors.textPrimary,
-    fontSize: FontSize.xxl,
-    fontWeight: '800',
-    marginBottom: Spacing.md,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    gap: Spacing.xl,
-  },
-  stat: {
-    alignItems: 'center',
-  },
-  statValue: {
-    color: Colors.textPrimary,
-    fontSize: FontSize.xl,
-    fontWeight: '800',
-  },
-  statLabel: {
-    color: Colors.textSecondary,
-    fontSize: FontSize.xs,
-  },
-  list: {
-    padding: Spacing.lg,
-    paddingBottom: 100,
-    gap: Spacing.md,
-  },
+  container: { flex: 1, backgroundColor: Colors.background },
+  statsRow: { flexDirection: 'row', gap: Spacing.xl, marginTop: Spacing.md },
+  stat: { alignItems: 'center' },
+  statValue: { color: Colors.textPrimary, fontSize: FontSize.xl, fontWeight: '800' },
+  statLabel: { color: Colors.textSecondary, fontSize: FontSize.xs },
+  list: { padding: Spacing.lg, paddingBottom: Spacing.xxl, gap: Spacing.md },
   card: {
     flexDirection: 'row',
     backgroundColor: Colors.card,
@@ -197,130 +163,22 @@ const styles = StyleSheet.create({
     borderColor: Colors.border,
     ...Shadows.card,
   },
-  cardImage: {
-    width: 110,
-    height: 130,
-  },
-  cardInfo: {
-    flex: 1,
-    padding: Spacing.md,
-  },
-  cardTitle: {
-    color: Colors.textPrimary,
-    fontSize: FontSize.sm,
-    fontWeight: '700',
-    lineHeight: 18,
-    marginBottom: 4,
-  },
-  cardBrand: {
-    color: Colors.textMuted,
-    fontSize: FontSize.xs,
-    marginBottom: Spacing.xs,
-  },
-  tagRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    marginBottom: Spacing.xs,
-  },
-  priceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.xs,
-    marginBottom: 4,
-  },
-  price: {
-    color: Colors.textPrimary,
-    fontSize: FontSize.md,
-    fontWeight: '800',
-  },
-  originalPrice: {
-    color: Colors.textMuted,
-    fontSize: FontSize.xs,
-    textDecorationLine: 'line-through',
-  },
-  saveBadge: {
-    backgroundColor: Colors.accent,
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: BorderRadius.full,
-  },
-  saveText: {
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: '700',
-  },
-  dropHint: {
-    color: Colors.success,
-    fontSize: FontSize.xs,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  cardBottom: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexWrap: 'wrap',
-  },
-  platformChip: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: BorderRadius.full,
-  },
-  platformText: {
-    color: '#fff',
-    fontSize: 9,
-    fontWeight: '700',
-  },
-  alertChip: {
-    backgroundColor: Colors.warning + '25',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: BorderRadius.full,
-  },
-  alertChipText: {
-    color: Colors.warning,
-    fontSize: 9,
-    fontWeight: '600',
-  },
-  removeBtn: {
-    marginLeft: 'auto',
-  },
-  removeBtnText: {
-    fontSize: 14,
-  },
-  emptyState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.xxxl,
-  },
-  emptyIcon: {
-    fontSize: 64,
-    marginBottom: Spacing.lg,
-  },
-  emptyTitle: {
-    color: Colors.textPrimary,
-    fontSize: FontSize.xl,
-    fontWeight: '800',
-    marginBottom: Spacing.sm,
-    textAlign: 'center',
-  },
-  emptyDesc: {
-    color: Colors.textSecondary,
-    fontSize: FontSize.md,
-    textAlign: 'center',
-    lineHeight: 22,
-    marginBottom: Spacing.xl,
-  },
-  browseBtn: {
-    paddingHorizontal: Spacing.xxl,
-    paddingVertical: Spacing.md,
-    borderRadius: BorderRadius.full,
-  },
-  browseBtnText: {
-    color: '#fff',
-    fontSize: FontSize.md,
-    fontWeight: '700',
-  },
+  cardImage: { width: 110, minHeight: 150 },
+  cardInfo: { flex: 1, padding: Spacing.md },
+  cardTitle: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: '700', lineHeight: 18, marginBottom: 4 },
+  cardBrand: { color: Colors.textMuted, fontSize: FontSize.xs, marginBottom: Spacing.xs },
+  tagRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: Spacing.xs },
+  priceRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs, marginBottom: 4 },
+  price: { color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: '800' },
+  originalPrice: { color: Colors.textMuted, fontSize: FontSize.xs, textDecorationLine: 'line-through' },
+  saveBadge: { backgroundColor: Colors.accent, paddingHorizontal: 6, paddingVertical: 1, borderRadius: BorderRadius.full },
+  saveText: { color: '#1A1A2E', fontSize: 9, fontWeight: '800' },
+  dropHint: { color: Colors.success, fontSize: FontSize.xs, fontWeight: '600', marginBottom: 4 },
+  cardBottom: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 },
+  platformChip: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: BorderRadius.full },
+  platformText: { color: '#fff', fontSize: 9, fontWeight: '700' },
+  alertChip: { backgroundColor: Colors.warning + '25', paddingHorizontal: 6, paddingVertical: 2, borderRadius: BorderRadius.full },
+  alertChipText: { color: Colors.warning, fontSize: 9, fontWeight: '600' },
+  removeBtn: { marginLeft: 'auto', paddingHorizontal: Spacing.sm, paddingVertical: 2 },
+  removeBtnText: { color: Colors.error, fontSize: FontSize.xs, fontWeight: '700' },
 });

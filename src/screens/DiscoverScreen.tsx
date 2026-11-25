@@ -1,429 +1,425 @@
 // ============================================================
-// VibeVault – Discovery Feed Screen (Objective 1 contd.)
+// VibeVault – Discovery Feed Screen (Objective 1)
 //
-// Personalized fashion discovery feed showing AI-ranked
-// recommendations with sustainability scores, price predictions,
-// and style match percentages.
+// Personalised discovery feed: listings ranked by style match,
+// with sustainability, deal scores and price predictions.
 // ============================================================
 
-import React, { useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  Image,
-  TextInput,
-  RefreshControl,
-} from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FlatList, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import {
-  Colors,
-  Spacing,
-  FontSize,
-  BorderRadius,
-  Shadows,
-  STYLE_COLORS,
-  PLATFORM_COLORS,
-} from '../constants/theme';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { CompositeNavigationProp, useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
+import { useShallow } from 'zustand/react/shallow';
+import { BorderRadius, Colors, FontSize, PLATFORM_COLORS, STYLE_COLORS, Shadows, Spacing } from '../constants/theme';
+import { CATEGORIES, PLATFORMS, REGIONS } from '../constants/marketplaces';
 import { useStore } from '../store/useStore';
 import { FashionItem, ItemCategory, Platform, Region } from '../types';
+import { DiscoverStackParamList, RootTabParamList } from '../navigation/types';
 import Tag from '../components/common/Tag';
-import ScoreBadge from '../components/common/ScoreBadge';
+import ChipRow from '../components/common/ChipRow';
+import EmptyState from '../components/common/EmptyState';
+import ProductImage from '../components/common/ProductImage';
+import ScreenHeader from '../components/common/ScreenHeader';
+import { refreshAndNotify } from '../services/lifecycle';
 import { getDealScore } from '../services/priceEngine';
+import { formatPrice, percentOff } from '../utils/format';
 
-const CATEGORIES: (ItemCategory | 'All')[] = ['All', 'Tops', 'Bottoms', 'Dresses', 'Outerwear', 'Shoes', 'Accessories', 'Bags'];
-const PLATFORMS: Array<'All' | Platform> = ['All', 'Myntra', 'Meesho', 'Amazon', 'Flipkart', 'Depop', 'Poshmark', 'Vinted', 'ThredUp', 'Local Thrift'];
-const REGIONS: Array<'All' | Region> = ['All', 'India', 'US', 'EU', 'Global'];
+type Nav = CompositeNavigationProp<
+  NativeStackNavigationProp<DiscoverStackParamList, 'DiscoverFeed'>,
+  BottomTabNavigationProp<RootTabParamList>
+>;
 
-export default function DiscoverScreen({ navigation }: any) {
-  const { recommendedItems, profile, isProfileComplete, toggleWishlist, vibeSummary } = useStore();
-  const [selectedCategory, setSelectedCategory] = useState<ItemCategory | 'All'>('All');
-  const [searchQuery, setSearchQuery] = useState('');
+type SortKey = 'match' | 'deal' | 'price' | 'sustainability';
+
+const CATEGORY_OPTIONS: ('All' | ItemCategory)[] = ['All', ...CATEGORIES];
+const PLATFORM_OPTIONS: ('All' | Platform)[] = ['All', ...PLATFORMS];
+const REGION_OPTIONS: ('All' | Region)[] = ['All', ...REGIONS];
+const SORT_OPTIONS: { key: SortKey; label: string }[] = [
+  { key: 'match', label: 'Best Match' },
+  { key: 'deal', label: 'Deal Score' },
+  { key: 'price', label: 'Lowest Price' },
+  { key: 'sustainability', label: 'Most Eco' },
+];
+
+export default function DiscoverScreen() {
+  const navigation = useNavigation<Nav>();
+  const { recommendedItems, wishlist, isProfileComplete, vibeSummary, toggleWishlist } = useStore(
+    useShallow((s) => ({
+      recommendedItems: s.recommendedItems,
+      wishlist: s.profile.wishlist,
+      isProfileComplete: s.isProfileComplete,
+      vibeSummary: s.vibeSummary,
+      toggleWishlist: s.toggleWishlist,
+    })),
+  );
+
+  const [category, setCategory] = useState<'All' | ItemCategory>('All');
+  const [platform, setPlatform] = useState<'All' | Platform>('All');
+  const [region, setRegion] = useState<'All' | Region>('All');
+  const [sortBy, setSortBy] = useState<SortKey>('match');
+  const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
-  const [sortBy, setSortBy] = useState<'match' | 'price' | 'sustainability' | 'deal'>('match');
-  const [selectedPlatform, setSelectedPlatform] = useState<'All' | Platform>('All');
-  const [selectedRegion, setSelectedRegion] = useState<'All' | Region>('All');
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+  }, []);
+
+  // "Best Match" needs a style profile; fall back to deal score until then.
+  const effectiveSort: SortKey = !isProfileComplete && sortBy === 'match' ? 'deal' : sortBy;
+  const sortOptions = isProfileComplete ? SORT_OPTIONS : SORT_OPTIONS.filter((o) => o.key !== 'match');
+  const wishlistSet = useMemo(() => new Set(wishlist), [wishlist]);
+  const hasFilters = category !== 'All' || platform !== 'All' || region !== 'All' || query.trim().length > 0;
+
+  const filteredItems = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const items = recommendedItems.filter((item) => {
+      if (category !== 'All' && item.category !== category) return false;
+      if (platform !== 'All' && item.platform !== platform) return false;
+      if (region !== 'All' && item.region !== region) return false;
+      if (!q) return true;
+      return (
+        item.title.toLowerCase().includes(q) ||
+        item.brand.toLowerCase().includes(q) ||
+        item.category.toLowerCase().includes(q) ||
+        item.platform.toLowerCase().includes(q) ||
+        item.styleArchetypes.some((s) => s.toLowerCase().includes(q))
+      );
+    });
+    const sorted = [...items];
+    switch (effectiveSort) {
+      case 'price':
+        sorted.sort((a, b) => a.currentPrice - b.currentPrice);
+        break;
+      case 'sustainability':
+        sorted.sort((a, b) => b.sustainabilityScore - a.sustainabilityScore);
+        break;
+      case 'deal':
+        sorted.sort((a, b) => getDealScore(b) - getDealScore(a));
+        break;
+      default:
+        break; // already ranked by match
+    }
+    return sorted;
+  }, [recommendedItems, category, platform, region, query, effectiveSort]);
+
+  const clearFilters = useCallback(() => {
+    setCategory('All');
+    setPlatform('All');
+    setRegion('All');
+    setQuery('');
+  }, []);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 1000);
+    // Same daily tasks as app start: new prices, alert checks, streak.
+    refreshAndNotify(new Date());
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => setRefreshing(false), 500);
   }, []);
 
-  // Filter and sort items
-  const filteredItems = recommendedItems
-    .filter((item) => {
-      if (selectedCategory !== 'All' && item.category !== selectedCategory) return false;
-      if (selectedPlatform !== 'All' && item.platform !== selectedPlatform) return false;
-      if (selectedRegion !== 'All' && item.region !== selectedRegion) return false;
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        return (
-          item.title.toLowerCase().includes(q) ||
-          item.brand.toLowerCase().includes(q) ||
-          item.styleArchetypes.some((s) => s.toLowerCase().includes(q))
-        );
-      }
-      return true;
-    })
-    .sort((a, b) => {
-      switch (sortBy) {
-        case 'price': return a.currentPrice - b.currentPrice;
-        case 'sustainability': return b.sustainabilityScore - a.sustainabilityScore;
-        case 'deal': return getDealScore(b) - getDealScore(a);
-        default: return b.matchScore - a.matchScore;
-      }
-    });
+  const openItem = useCallback((itemId: string) => navigation.navigate('ItemDetail', { itemId }), [navigation]);
 
-  const renderItem = ({ item }: { item: FashionItem }) => {
-    const isWishlisted = profile.wishlist.includes(item.id);
-    const dealScore = getDealScore(item);
-    const savingsPercent = Math.round((1 - item.currentPrice / item.originalPrice) * 100);
+  const renderItem = useCallback(
+    ({ item }: { item: FashionItem }) => (
+      <DiscoverCard
+        item={item}
+        isWishlisted={wishlistSet.has(item.id)}
+        showMatch={isProfileComplete}
+        onPress={openItem}
+        onToggleWishlist={toggleWishlist}
+      />
+    ),
+    [wishlistSet, isProfileComplete, openItem, toggleWishlist],
+  );
 
-    return (
-      <TouchableOpacity
-        activeOpacity={0.85}
-        style={styles.card}
-        onPress={() => navigation?.navigate?.('ItemDetail', { item })}
-      >
-        {/* Image */}
-        <View style={styles.imageContainer}>
-          <Image source={{ uri: item.image }} style={styles.image} resizeMode="cover" />
-
-          {/* Match Score */}
-          <View style={styles.matchBadge}>
-            <LinearGradient
-              colors={
-                item.matchScore >= 80
-                  ? (Colors.gradientEco as unknown as [string, string])
-                  : item.matchScore >= 60
-                    ? (Colors.gradientPrimary as unknown as [string, string])
-                    : (Colors.gradientAccent as unknown as [string, string])
-              }
-              style={styles.matchBadgeGradient}
+  const listHeader = (
+    <View>
+      {!isProfileComplete && (
+        <TouchableOpacity
+          style={styles.profileCta}
+          onPress={() => navigation.navigate('Profiler')}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+        >
+          <LinearGradient colors={Colors.gradientPrimary} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.profileCtaInner}>
+            <Ionicons name="sparkles" size={22} color="#FFF" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.profileCtaTitle}>Find your vibe in 2 minutes</Text>
+              <Text style={styles.profileCtaText}>Take the Style Profiler to unlock personalised match scores.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#FFF" />
+          </LinearGradient>
+        </TouchableOpacity>
+      )}
+      <ChipRow options={CATEGORY_OPTIONS} selected={category} onSelect={setCategory} accessibilityLabel="Category" />
+      <ChipRow options={PLATFORM_OPTIONS} selected={platform} onSelect={setPlatform} accessibilityLabel="Platform" compact />
+      <ChipRow
+        options={REGION_OPTIONS}
+        selected={region}
+        onSelect={setRegion}
+        accessibilityLabel="Region"
+        getLabel={(r) => (r === 'All' ? 'All regions' : r)}
+        compact
+      />
+      <View style={styles.sortRow}>
+        {sortOptions.map((option) => {
+          const active = effectiveSort === option.key;
+          return (
+            <TouchableOpacity
+              key={option.key}
+              style={[styles.sortBtn, active && styles.sortBtnActive]}
+              onPress={() => setSortBy(option.key)}
+              accessibilityRole="button"
+              aria-selected={active}
             >
-              <Text style={styles.matchScoreText}>{item.matchScore}%</Text>
-              <Text style={styles.matchLabel}>match</Text>
-            </LinearGradient>
-          </View>
-
-          {/* Wishlist */}
-          <TouchableOpacity
-            style={styles.wishlistBtn}
-            onPress={() => toggleWishlist(item.id)}
-          >
-            <Text style={styles.wishlistIcon}>{isWishlisted ? '❤️' : '🤍'}</Text>
+              <Text style={[styles.sortBtnText, active && styles.sortBtnTextActive]}>{option.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+      <View style={styles.resultsRow}>
+        <Text style={styles.resultsText}>
+          {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'}
+        </Text>
+        {hasFilters && (
+          <TouchableOpacity onPress={clearFilters} accessibilityRole="button" hitSlop={8}>
+            <Text style={styles.clearText}>Clear filters</Text>
           </TouchableOpacity>
-
-          {/* Savings badge */}
-          {savingsPercent >= 40 && (
-            <View style={styles.savingsBadge}>
-              <Text style={styles.savingsText}>-{savingsPercent}%</Text>
-            </View>
-          )}
-
-          {/* Platform Tag */}
-          <View style={[styles.platformTag, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}>
-            <Text style={styles.platformText}>{item.platform}</Text>
-          </View>
-        </View>
-
-        {/* Info */}
-        <View style={styles.cardInfo}>
-          <Text style={styles.itemTitle} numberOfLines={2}>{item.title}</Text>
-
-          <View style={styles.brandRow}>
-            <Text style={styles.brandText}>{item.brand}</Text>
-            <Text style={styles.conditionText}>· {item.condition}</Text>
-            <Text style={styles.sizeText}>· {item.size}</Text>
-          </View>
-
-          {/* Style Tags */}
-          <View style={styles.tagRow}>
-            {item.styleArchetypes.slice(0, 3).map((s) => (
-              <Tag key={s} label={s} color={STYLE_COLORS[s]} selected small />
-            ))}
-          </View>
-
-          {/* Price & Sustainability Row */}
-          <View style={styles.priceRow}>
-            <View style={styles.priceInfo}>
-              <Text style={styles.currentPrice}>${item.currentPrice.toFixed(2)}</Text>
-              <Text style={styles.originalPrice}>${item.originalPrice.toFixed(2)}</Text>
-            </View>
-
-            <View style={styles.metricsRow}>
-              {/* Sustainability */}
-              <View style={styles.metricItem}>
-                <Text style={styles.metricIcon}>🌿</Text>
-                <Text style={styles.metricValue}>{item.sustainabilityScore}</Text>
-              </View>
-              {/* Deal Score */}
-              <View style={styles.metricItem}>
-                <Text style={styles.metricIcon}>🔥</Text>
-                <Text style={styles.metricValue}>{dealScore}</Text>
-              </View>
-              {/* CO2 */}
-              <View style={styles.metricItem}>
-                <Text style={styles.metricIcon}>💨</Text>
-                <Text style={styles.metricValue}>{item.co2Saved}kg</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Price prediction hint */}
-          {item.predictedPrice7d < item.currentPrice && (
-            <View style={styles.predictionHint}>
-              <Text style={styles.predictionText}>
-                📉 Price may drop to ${item.predictedPrice7d.toFixed(2)} in 7 days
-              </Text>
-            </View>
-          )}
-        </View>
-      </TouchableOpacity>
-    );
-  };
+        )}
+      </View>
+    </View>
+  );
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <LinearGradient colors={[Colors.primaryDark, Colors.background]} style={styles.header}>
-        <Text style={styles.headerTitle}>Discover</Text>
-        {isProfileComplete && vibeSummary ? (
-          <Text style={styles.headerSub} numberOfLines={2}>{vibeSummary}</Text>
-        ) : (
-          <Text style={styles.headerSub}>Complete your Style Profile to get personalized picks!</Text>
-        )}
-
-        {/* Search */}
+      <ScreenHeader
+        title="Discover"
+        subtitle={isProfileComplete && vibeSummary ? vibeSummary : 'Thrift finds and deals from 9 marketplaces.'}
+      >
         <View style={styles.searchContainer}>
-          <Text style={styles.searchIcon}>⌕</Text>
+          <Ionicons name="search" size={16} color={Colors.textMuted} />
           <TextInput
             style={styles.searchInput}
             placeholder="Search brands, styles, items..."
             placeholderTextColor={Colors.textMuted}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
+            value={query}
+            onChangeText={setQuery}
+            returnKeyType="search"
+            autoCorrect={false}
+            autoCapitalize="none"
+            accessibilityLabel="Search listings"
           />
+          {query.length > 0 && (
+            <TouchableOpacity onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={8}>
+              <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+          )}
         </View>
-      </LinearGradient>
+      </ScreenHeader>
 
-      {/* Categories */}
-      <FlatList
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        data={CATEGORIES}
-        keyExtractor={(item) => item}
-        style={styles.categoryList}
-        contentContainerStyle={styles.categoryContent}
-        renderItem={({ item: cat }) => (
-          <TouchableOpacity
-            style={[styles.categoryChip, selectedCategory === cat && styles.categoryChipActive]}
-            onPress={() => setSelectedCategory(cat)}
-          >
-            <Text style={[styles.categoryText, selectedCategory === cat && styles.categoryTextActive]}>
-              {cat}
-            </Text>
-          </TouchableOpacity>
-        )}
-      />
-
-      {/* Platform Filters */}
-      <FlatList
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        data={PLATFORMS}
-        keyExtractor={(item) => `platform-${item}`}
-        style={styles.categoryList}
-        contentContainerStyle={styles.categoryContent}
-        renderItem={({ item: platform }) => (
-          <TouchableOpacity
-            style={[styles.categoryChip, selectedPlatform === platform && styles.categoryChipActive]}
-            onPress={() => setSelectedPlatform(platform)}
-          >
-            <Text style={[styles.categoryText, selectedPlatform === platform && styles.categoryTextActive]}>
-              {platform}
-            </Text>
-          </TouchableOpacity>
-        )}
-      />
-
-      {/* Region Filters */}
-      <FlatList
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        data={REGIONS}
-        keyExtractor={(item) => `region-${item}`}
-        style={styles.categoryList}
-        contentContainerStyle={styles.categoryContent}
-        renderItem={({ item: region }) => (
-          <TouchableOpacity
-            style={[styles.categoryChip, selectedRegion === region && styles.categoryChipActive]}
-            onPress={() => setSelectedRegion(region)}
-          >
-            <Text style={[styles.categoryText, selectedRegion === region && styles.categoryTextActive]}>
-              {region}
-            </Text>
-          </TouchableOpacity>
-        )}
-      />
-
-      {/* Sort buttons */}
-      <View style={styles.sortRow}>
-        {([
-          { key: 'match', label: 'Match' },
-          { key: 'price', label: 'Price' },
-          { key: 'sustainability', label: 'Eco' },
-          { key: 'deal', label: 'Deal Score' },
-        ] as const).map((s) => (
-          <TouchableOpacity
-            key={s.key}
-            style={[styles.sortBtn, sortBy === s.key && styles.sortBtnActive]}
-            onPress={() => setSortBy(s.key)}
-          >
-            <Text style={[styles.sortBtnText, sortBy === s.key && styles.sortBtnTextActive]}>
-              {s.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Item Grid */}
       <FlatList
         data={filteredItems}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        numColumns={1}
+        ListHeaderComponent={listHeader}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} />}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        initialNumToRender={4}
+        windowSize={7}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-              <Text style={styles.emptyEmoji}>⌕</Text>
-            <Text style={styles.emptyText}>No items match your filters</Text>
-            <Text style={styles.emptyHint}>Try adjusting your search or category</Text>
-          </View>
+          <EmptyState
+            icon="search-outline"
+            title="No items match your filters"
+            message="Try a different search, category, platform or region."
+            actionLabel="Clear filters"
+            onAction={clearFilters}
+          />
         }
       />
     </View>
   );
 }
 
+interface DiscoverCardProps {
+  item: FashionItem;
+  isWishlisted: boolean;
+  showMatch: boolean;
+  onPress: (itemId: string) => void;
+  onToggleWishlist: (itemId: string) => void;
+}
+
+const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, showMatch, onPress, onToggleWishlist }: DiscoverCardProps) {
+  const dealScore = getDealScore(item);
+  const savings = percentOff(item.currentPrice, item.originalPrice);
+  const dropsSoon = item.predictedPrice7d < item.currentPrice * 0.99;
+  const matchGradient =
+    item.matchScore >= 80 ? Colors.gradientEco : item.matchScore >= 60 ? Colors.gradientPrimary : Colors.gradientAccent;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      style={styles.card}
+      onPress={() => onPress(item.id)}
+      accessibilityRole="button"
+      accessibilityLabel={`${item.title}, ${formatPrice(item.currentPrice)} on ${item.platform}${showMatch ? `, ${item.matchScore}% match` : ''}`}
+      // Screen readers treat the card as one element, so expose the heart as an action.
+      accessibilityActions={[
+        { name: 'activate' },
+        { name: 'toggleWishlist', label: isWishlisted ? 'Remove from wishlist' : 'Save to wishlist' },
+      ]}
+      onAccessibilityAction={(event) => {
+        if (event.nativeEvent.actionName === 'toggleWishlist') onToggleWishlist(item.id);
+        else if (event.nativeEvent.actionName === 'activate') onPress(item.id);
+      }}
+    >
+      <View style={styles.imageContainer}>
+        <ProductImage uri={item.image} style={styles.image} category={item.category} colors={item.colors} iconSize={40} />
+
+        {showMatch && (
+          <View style={styles.matchBadge}>
+            <LinearGradient colors={matchGradient} style={styles.matchBadgeGradient}>
+              <Text style={styles.matchScoreText}>{item.matchScore}%</Text>
+              <Text style={styles.matchLabel}>match</Text>
+            </LinearGradient>
+          </View>
+        )}
+
+        <TouchableOpacity
+          style={styles.wishlistBtn}
+          onPress={() => onToggleWishlist(item.id)}
+          accessibilityRole="button"
+          accessibilityLabel={isWishlisted ? `Remove ${item.title} from wishlist` : `Save ${item.title} to wishlist`}
+          aria-selected={isWishlisted}
+          hitSlop={6}
+        >
+          <Text style={styles.wishlistIcon}>{isWishlisted ? '❤️' : '🤍'}</Text>
+        </TouchableOpacity>
+
+        {savings >= 40 && (
+          <View style={styles.savingsBadge}>
+            <Text style={styles.savingsText}>-{savings}%</Text>
+          </View>
+        )}
+
+        <View style={[styles.platformTag, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}>
+          <Text style={styles.platformText}>{item.platform}</Text>
+        </View>
+      </View>
+
+      <View style={styles.cardInfo}>
+        <Text style={styles.itemTitle} numberOfLines={2}>
+          {item.title}
+        </Text>
+        <Text style={styles.brandText} numberOfLines={1}>
+          {item.brand} · {item.condition} · {item.size}
+        </Text>
+
+        <View style={styles.tagRow}>
+          {item.styleArchetypes.slice(0, 3).map((s) => (
+            <Tag key={s} label={s} color={STYLE_COLORS[s]} selected small />
+          ))}
+        </View>
+
+        <View style={styles.priceRow}>
+          <View style={styles.priceInfo}>
+            <Text style={styles.currentPrice}>{formatPrice(item.currentPrice)}</Text>
+            {item.originalPrice > item.currentPrice && <Text style={styles.originalPrice}>{formatPrice(item.originalPrice)}</Text>}
+          </View>
+          <View style={styles.metricsRow}>
+            <Text style={styles.metric} accessibilityLabel={`Eco score ${item.sustainabilityScore}`}>
+              🌿 {item.sustainabilityScore}
+            </Text>
+            <Text style={styles.metric} accessibilityLabel={`Deal score ${dealScore}`}>
+              🔥 {dealScore}
+            </Text>
+            <Text style={styles.metric} accessibilityLabel={`${item.co2Saved} kilograms of CO2 saved`}>
+              💨 {item.co2Saved}kg
+            </Text>
+          </View>
+        </View>
+
+        {dropsSoon && (
+          <View style={styles.predictionHint}>
+            <Text style={styles.predictionText}>📉 Predicted to drop to {formatPrice(item.predictedPrice7d)} within 7 days</Text>
+          </View>
+        )}
+      </View>
+    </TouchableOpacity>
+  );
+});
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
 
-  // Header
-  header: {
-    paddingTop: 54,
-    paddingBottom: Spacing.lg,
-    paddingHorizontal: Spacing.xl,
-  },
-  headerTitle: {
-    fontSize: FontSize.xxl,
-    fontWeight: '800',
-    color: Colors.textPrimary,
-  },
-  headerSub: {
-    fontSize: FontSize.sm,
-    color: Colors.textSecondary,
-    marginTop: 4,
-    marginBottom: Spacing.md,
-  },
   searchContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: Spacing.sm,
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.border,
+    marginTop: Spacing.md,
   },
-  searchIcon: { fontSize: 16, marginRight: Spacing.sm },
-  searchInput: {
-    flex: 1,
-    color: Colors.textPrimary,
-    fontSize: FontSize.md,
-    paddingVertical: Spacing.sm,
-  },
+  searchInput: { flex: 1, color: Colors.textPrimary, fontSize: FontSize.md, paddingVertical: Spacing.sm + 2 },
 
-  // Categories
-  categoryList: { maxHeight: 48 },
-  categoryContent: { paddingHorizontal: Spacing.lg, gap: Spacing.sm },
-  categoryChip: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    borderRadius: BorderRadius.full,
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    marginRight: Spacing.sm,
-  },
-  categoryChipActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  categoryText: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: '600' },
-  categoryTextActive: { color: '#FFF' },
+  profileCta: { marginHorizontal: Spacing.lg, marginTop: Spacing.md, marginBottom: Spacing.sm, borderRadius: BorderRadius.lg, overflow: 'hidden' },
+  profileCtaInner: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, padding: Spacing.lg },
+  profileCtaTitle: { color: '#FFF', fontSize: FontSize.md, fontWeight: '800' },
+  profileCtaText: { color: 'rgba(255,255,255,0.85)', fontSize: FontSize.sm, marginTop: 2 },
 
-  // Sort
-  sortRow: {
-    flexDirection: 'row',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    gap: Spacing.xs,
-  },
-  sortBtn: {
-    paddingHorizontal: Spacing.md,
-    paddingVertical: 4,
-    borderRadius: BorderRadius.full,
-    backgroundColor: Colors.surface,
-  },
+  sortRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.xs },
+  sortBtn: { paddingHorizontal: Spacing.md, paddingVertical: 6, borderRadius: BorderRadius.full, backgroundColor: Colors.surface },
   sortBtnActive: { backgroundColor: Colors.primaryDark },
   sortBtnText: { color: Colors.textMuted, fontSize: FontSize.xs, fontWeight: '600' },
   sortBtnTextActive: { color: Colors.primaryLight },
 
-  // List
-  listContent: { paddingHorizontal: Spacing.lg, paddingBottom: 100 },
+  resultsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    paddingBottom: Spacing.sm,
+  },
+  resultsText: { color: Colors.textMuted, fontSize: FontSize.sm },
+  clearText: { color: Colors.primaryLight, fontSize: FontSize.sm, fontWeight: '700' },
 
-  // Card
+  listContent: { paddingBottom: Spacing.xxl },
+
   card: {
     backgroundColor: Colors.card,
     borderRadius: BorderRadius.lg,
+    marginHorizontal: Spacing.lg,
     marginBottom: Spacing.lg,
     borderWidth: 1,
     borderColor: Colors.border,
     overflow: 'hidden',
     ...Shadows.card,
   },
-  imageContainer: {
-    height: 200,
-    position: 'relative',
-  },
-  image: {
-    width: '100%',
-    height: '100%',
-    backgroundColor: Colors.surfaceLight,
-  },
+  imageContainer: { height: 220 },
+  image: { width: '100%', height: '100%' },
 
-  // Badges
   matchBadge: { position: 'absolute', top: Spacing.sm, left: Spacing.sm },
-  matchBadgeGradient: {
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 4,
-    borderRadius: BorderRadius.sm,
-    alignItems: 'center',
-  },
+  matchBadgeGradient: { paddingHorizontal: Spacing.sm, paddingVertical: 4, borderRadius: BorderRadius.sm, alignItems: 'center' },
   matchScoreText: { color: '#FFF', fontSize: FontSize.lg, fontWeight: '800' },
-  matchLabel: { color: 'rgba(255,255,255,0.7)', fontSize: FontSize.xs },
+  matchLabel: { color: 'rgba(255,255,255,0.85)', fontSize: FontSize.xs },
 
   wishlistBtn: {
     position: 'absolute',
     top: Spacing.sm,
     right: Spacing.sm,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: 'rgba(0,0,0,0.5)',
     alignItems: 'center',
     justifyContent: 'center',
@@ -451,36 +447,17 @@ const styles = StyleSheet.create({
   },
   platformText: { color: '#FFF', fontSize: FontSize.xs, fontWeight: '700' },
 
-  // Card Info
   cardInfo: { padding: Spacing.md },
-  itemTitle: {
-    fontSize: FontSize.lg,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 4,
-  },
-  brandRow: { flexDirection: 'row', marginBottom: Spacing.sm },
-  brandText: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: '600' },
-  conditionText: { color: Colors.textMuted, fontSize: FontSize.sm, marginLeft: 4 },
-  sizeText: { color: Colors.textMuted, fontSize: FontSize.sm, marginLeft: 4 },
+  itemTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.textPrimary, marginBottom: 4 },
+  brandText: { color: Colors.textSecondary, fontSize: FontSize.sm, marginBottom: Spacing.sm },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: Spacing.sm },
 
-  priceRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
+  priceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: Spacing.sm },
   priceInfo: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.sm },
   currentPrice: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.success },
-  originalPrice: {
-    fontSize: FontSize.sm,
-    color: Colors.textMuted,
-    textDecorationLine: 'line-through',
-  },
+  originalPrice: { fontSize: FontSize.sm, color: Colors.textMuted, textDecorationLine: 'line-through' },
   metricsRow: { flexDirection: 'row', gap: Spacing.md },
-  metricItem: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  metricIcon: { fontSize: 12 },
-  metricValue: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600' },
+  metric: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600' },
 
   predictionHint: {
     marginTop: Spacing.sm,
@@ -490,10 +467,4 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.sm,
   },
   predictionText: { color: Colors.primaryLight, fontSize: FontSize.xs },
-
-  // Empty
-  emptyState: { alignItems: 'center', marginTop: 60 },
-  emptyEmoji: { fontSize: 48, marginBottom: Spacing.md },
-  emptyText: { color: Colors.textSecondary, fontSize: FontSize.lg, fontWeight: '600' },
-  emptyHint: { color: Colors.textMuted, fontSize: FontSize.sm, marginTop: 4 },
 });

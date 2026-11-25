@@ -3,26 +3,23 @@
 // ============================================================
 
 import React from 'react';
-import { View, StyleSheet, ViewStyle } from 'react-native';
+import { StyleProp, StyleSheet, ViewStyle } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BorderRadius, Colors, Shadows, Spacing } from '../../constants/theme';
+import { BorderRadius, Colors, GradientColors, Shadows, Spacing } from '../../constants/theme';
 
 interface GradientCardProps {
   children: React.ReactNode;
-  gradient?: readonly string[];
-  style?: ViewStyle;
+  gradient?: GradientColors;
+  style?: StyleProp<ViewStyle>;
   padding?: number;
 }
 
-export default function GradientCard({
-  children,
-  gradient,
-  style,
-  padding = Spacing.lg,
-}: GradientCardProps) {
+const DEFAULT_GRADIENT: GradientColors = [Colors.surface, Colors.surfaceLight];
+
+export default function GradientCard({ children, gradient, style, padding = Spacing.lg }: GradientCardProps) {
   return (
     <LinearGradient
-      colors={(gradient || [Colors.surface, Colors.surfaceLight]) as [string, string, ...string[]]}
+      colors={gradient ?? DEFAULT_GRADIENT}
       start={{ x: 0, y: 0 }}
       end={{ x: 1, y: 1 }}
       style={[styles.card, { padding }, style]}

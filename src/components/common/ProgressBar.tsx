@@ -3,16 +3,19 @@
 // ============================================================
 
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BorderRadius, Colors, FontSize, Spacing } from '../../constants/theme';
+import { BorderRadius, Colors, FontSize, GradientColors, Spacing } from '../../constants/theme';
 
 interface ProgressBarProps {
   progress: number; // 0-100
   height?: number;
-  gradient?: readonly string[];
+  gradient?: GradientColors;
   showLabel?: boolean;
   label?: string;
+  /** Text shown on the right instead of the percentage. */
+  valueLabel?: string;
+  accessibilityLabel?: string;
 }
 
 export default function ProgressBar({
@@ -21,24 +24,33 @@ export default function ProgressBar({
   gradient,
   showLabel = false,
   label,
+  valueLabel,
+  accessibilityLabel,
 }: ProgressBarProps) {
-  const clampedProgress = Math.min(100, Math.max(0, progress));
+  const clamped = Number.isFinite(progress) ? Math.round(Math.min(100, Math.max(0, progress))) : 0;
 
   return (
-    <View>
+    <View
+      accessible
+      accessibilityRole="progressbar"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityValue={{ min: 0, max: 100, now: clamped }}
+    >
       {showLabel && (
         <View style={styles.labelRow}>
-          <Text style={styles.label}>{label || ''}</Text>
-          <Text style={styles.percent}>{clampedProgress}%</Text>
+          <Text style={styles.label}>{label ?? ''}</Text>
+          <Text style={styles.percent}>{valueLabel ?? `${clamped}%`}</Text>
         </View>
       )}
       <View style={[styles.track, { height }]}>
-        <LinearGradient
-          colors={(gradient || Colors.gradientPrimary) as [string, string, ...string[]]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={[styles.fill, { width: `${clampedProgress}%` as any, height }]}
-        />
+        {clamped > 0 ? (
+          <LinearGradient
+            colors={gradient ?? Colors.gradientPrimary}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={[styles.fill, { width: `${clamped}%`, height }]}
+          />
+        ) : null}
       </View>
     </View>
   );

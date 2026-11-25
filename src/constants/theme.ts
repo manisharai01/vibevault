@@ -29,7 +29,7 @@ export const Colors = {
   // Text
   textPrimary: '#FFFFFF',
   textSecondary: '#A0A0C0',
-  textMuted: '#666690',
+  textMuted: '#8A8AB0',
 
   // Sustainability
   ecoGreen: '#00B894',
@@ -41,6 +41,9 @@ export const Colors = {
   gradientDark: ['#0F0F1A', '#1A1A2E'] as const,
   gradientEco: ['#00B894', '#55EFC4'] as const,
 };
+
+/** Gradient tuple accepted by expo-linear-gradient. */
+export type GradientColors = readonly [string, string, ...string[]];
 
 export const Spacing = {
   xs: 4,
@@ -88,10 +91,6 @@ export const Shadows = {
   },
 };
 
-export const LEVEL_THRESHOLDS = [
-  0, 100, 300, 600, 1000, 1500, 2200, 3000, 4000, 5500, 7500, 10000,
-];
-
 export const STYLE_COLORS: Record<string, string> = {
   Minimalist: '#DCDDE1',
   Streetwear: '#FF6B6B',
@@ -116,3 +115,15 @@ export const PLATFORM_COLORS: Record<string, string> = {
   Amazon: '#FF9900',
   Flipkart: '#2874F0',
 };
+
+/** Text colour that stays readable on top of a style/platform colour chip. */
+export function readableTextOn(hex: string): string {
+  const match = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!match) return '#FFFFFF';
+  const n = parseInt(match[1], 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.62 ? '#1A1A2E' : '#FFFFFF';
+}
