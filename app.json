@@ -36,6 +36,9 @@
       "shortName": "VibeVault",
       "themeColor": "#0F0F1A",
       "backgroundColor": "#0F0F1A"
-    }
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }
