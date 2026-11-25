@@ -54,8 +54,29 @@ src/
 
 ## Releasing
 
-1. Replace the placeholder identifiers `com.vibevault.app` (`app.json` → `ios.bundleIdentifier` / `android.package`) with your own before your first store build.
+Before your first store build:
+
+1. Replace the placeholder identifiers `com.vibevault.app` (`app.json` → `ios.bundleIdentifier` / `android.package`) with your own.
 2. Replace the default Expo icon and splash images in `assets/`.
-3. Build with [EAS Build](https://docs.expo.dev/build/introduction/) (`npx eas-cli build`), or `npx expo export --platform web` for a static web build.
+
+### Android APK (local build)
+
+Requires the Android SDK and NDK (installed with Android Studio) and JDK 17.
+
+```bash
+npx expo prebuild --platform android   # generates ./android (gitignored)
+cd android
+./gradlew assembleRelease              # Windows: gradlew.bat assembleRelease
+```
+
+The APK is written to `android/app/build/outputs/apk/release/app-release.apk` (a single APK for all phone CPU types).
+
+- `expo prebuild` changes the `android`/`ios` scripts in `package.json` to `expo run:*`. Revert that change if you want to keep using Expo Go.
+- The generated project signs release builds with a debug key. That's fine for installing the APK directly on phones. For the Play Store, sign with your own upload key (or let EAS manage it) and build an `.aab` with `./gradlew bundleRelease`.
+
+### Other targets
+
+- Cloud builds: [EAS Build](https://docs.expo.dev/build/introduction/) (`npx eas-cli build`). For an APK instead of an `.aab`, use a build profile with `"android": { "buildType": "apk" }` in `eas.json`.
+- Web: `npx expo export --platform web` produces a static site in `dist/`.
 
 Product photos are loaded from Unsplash. If an image can't be loaded (for example, offline), a placeholder is shown instead.
