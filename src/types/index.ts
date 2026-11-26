@@ -103,56 +103,56 @@ export type ItemCategory =
   | 'Accessories'
   | 'Bags';
 
-export type Platform =
-  | 'Depop'
-  | 'Poshmark'
-  | 'Vinted'
-  | 'ThredUp'
-  | 'Local Thrift'
-  | 'Myntra'
-  | 'Meesho'
-  | 'Amazon'
-  | 'Flipkart';
+/** Marketplaces with live prices (official APIs, via the VibeVault backend). */
+export type ListingSource = 'flipkart' | 'ebay';
+export type Platform = 'Flipkart' | 'eBay';
 
-export type Region = 'Global' | 'India' | 'US' | 'EU';
+/** India: sold in India. Global: international listings that ship to India. */
+export type Region = 'India' | 'Global';
 
 export interface PricePoint {
   date: string; // YYYY-MM-DD
   price: number;
 }
 
-/** Static listing data. Prices are simulated around `basePrice`. */
-export interface CatalogSeedItem {
-  id: string;
+/** A live marketplace listing. Prices come from the marketplace; nothing is simulated. */
+export interface FashionItem {
+  id: string; // `${source}:${marketplace item id}`
+  source: ListingSource;
+  platform: Platform;
   title: string;
-  description: string;
-  image: string;
+  description: string | null;
+  image: string | null;
   category: ItemCategory;
   styleArchetypes: StyleArchetype[];
-  basePrice: number;
-  originalPrice: number;
+  brand: string | null;
   condition: ItemCondition;
-  size: string;
-  brand: string;
-  platform: Platform;
-  sustainabilityScore: number; // 0-100
-  co2Saved: number; // kg
-  /** Distance in km — only meaningful for in-person (Local Thrift) listings. */
-  distance?: number;
-  seller: string;
-  listedDate: string; // YYYY-MM-DD
+  size: string | null;
   colors: string[];
-}
-
-export interface FashionItem extends Omit<CatalogSeedItem, 'basePrice'> {
+  seller: string | null;
   region: Region;
   productUrl: string;
+  currency: string; // ISO 4217, e.g. INR, USD
   currentPrice: number;
-  predictedPrice7d: number;
-  predictedPrice30d: number;
+  /** Retail price / MRP when the marketplace reports one above the current price. */
+  originalPrice: number | null;
+  /** Rupees per one unit of `currency` (1 for INR); null until an exchange rate is known. */
+  inrRate: number | null;
+  /** Recorded daily prices (oldest first). */
   priceHistory: PricePoint[];
+  /** Forecasts from the recorded history; null until there is enough of it. */
+  predictedPrice7d: number | null;
+  predictedPrice30d: number | null;
+  /** Pre-owned marketplace listing (vs. new retail). */
+  secondhand: boolean;
+  sustainabilityScore: number; // 0-100 (estimate)
+  co2Saved: number; // kg (estimate)
   /** 0-100 relevance to the user (0 until the Style Profile is complete). */
   matchScore: number;
+  available: boolean;
+  listedDate: string | null; // YYYY-MM-DD
+  firstSeen: string; // YYYY-MM-DD, when VibeVault started tracking it
+  lastChecked: string; // ISO timestamp of the latest price check
 }
 
 export type PriceAlertStatus = 'active' | 'triggered';
@@ -160,6 +160,7 @@ export type PriceAlertStatus = 'active' | 'triggered';
 export interface PriceAlert {
   id: string;
   itemId: string;
+  currency: string;
   targetPrice: number;
   priceAtCreation: number;
   createdAt: string; // ISO timestamp
@@ -175,11 +176,18 @@ export interface Purchase {
   itemId: string;
   title: string;
   platform: Platform;
+  currency: string;
   pricePaid: number;
-  originalPrice: number;
+  originalPrice: number | null;
+  /** Exchange rate to INR at purchase time (null if unknown). */
+  inrRate: number | null;
+  /** Pre-owned purchase (counts towards eco impact). */
+  secondhand: boolean;
   co2Saved: number;
   purchasedAt: string; // ISO timestamp
 }
+
+export type CatalogStatus = 'idle' | 'loading' | 'ready' | 'error' | 'unconfigured';
 
 // ---- Gamification ----
 
@@ -237,16 +245,6 @@ export interface Badge {
   rarity: BadgeRarity;
 }
 
-export interface LeaderboardEntry {
-  rank: number;
-  userId: string;
-  name: string;
-  points: number;
-  level: number;
-  styleArchetype: StyleArchetype | null;
-  isCurrentUser?: boolean;
-}
-
 export interface StreakState {
   lastActiveDate: string | null; // YYYY-MM-DD
   current: number;
@@ -257,8 +255,10 @@ export interface StreakState {
 
 export interface SustainabilityMetrics {
   totalCO2Saved: number;
+  /** Pre-owned purchases logged. */
   itemsThrifted: number;
   waterSavedLiters: number;
-  moneySaved: number;
+  /** Savings versus retail price, in rupees (purchases with a known exchange rate). */
+  moneySavedInr: number;
   treesEquivalent: number;
 }

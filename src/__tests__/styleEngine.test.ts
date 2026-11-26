@@ -1,5 +1,4 @@
 import { QUESTION_IDS } from '../data/profilerQuestions';
-import { buildCatalog } from '../services/catalog';
 import {
   buildStyleProfile,
   computeStyleScores,
@@ -12,9 +11,10 @@ import {
 import { getDealScore } from '../services/priceEngine';
 import { createDefaultProfile } from '../store/persistence';
 import { ProfilerAnswers } from '../types';
+import { makeEbayItem, sampleCatalog } from './helpers/fixtures';
 
 const NOW = new Date(2026, 10, 25, 10, 0);
-const catalog = buildCatalog(NOW);
+const catalog = sampleCatalog();
 
 const darkAcademia: ProfilerAnswers = {
   [QUESTION_IDS.personality]: 'introvert',
@@ -143,10 +143,16 @@ describe('scoring & recommendations', () => {
     expect(dark.slice(0, 3).every((item) => item.styleArchetypes.some((s) => ['Dark Academia', 'Minimalist', 'Preppy'].includes(s)))).toBe(true);
   });
 
-  it('penalises items above the user’s budget', () => {
-    const item = { ...catalog[0], currentPrice: 90 };
+  it('penalises items above the user’s budget (in rupees, converting other currencies)', () => {
+    const item = { ...catalog[0], currentPrice: 2500 };
     const base = profileFrom(darkAcademia);
     expect(scoreItem(item, { ...base, budgetTier: 'budget-low' })).toBeLessThan(scoreItem(item, { ...base, budgetTier: 'budget-premium' }));
+    // $30 ≈ ₹2,767: over a ₹500 budget, within ₹3,000+.
+    const usd = makeEbayItem({ current_price: 30 });
+    expect(scoreItem(usd, { ...base, budgetTier: 'budget-low' })).toBeLessThan(scoreItem(usd, { ...base, budgetTier: 'budget-premium' }));
+    // Unknown exchange rate: no budget penalty either way.
+    const unknown = makeEbayItem({ current_price: 30, inr_rate: null });
+    expect(scoreItem(unknown, { ...base, budgetTier: 'budget-low' })).toBe(scoreItem(unknown, { ...base, budgetTier: 'budget-premium' }));
   });
 
   it('weights sustainability by how much the user cares', () => {

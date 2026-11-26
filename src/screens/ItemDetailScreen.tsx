@@ -1,12 +1,14 @@
 // ============================================================
 // VibeVault – Item Detail Screen
-// Full listing view: price history & forecast, price alerts,
-// style-match breakdown, eco impact, purchase logging and a
-// link out to the marketplace.
+// One live listing: the price is re-checked on the marketplace when
+// the screen opens. Shows recorded price history (and a forecast once
+// there is enough of it), price alerts, style fit, eco impact,
+// purchase logging, and links out to the marketplace and other stores.
 // ============================================================
 
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Keyboard,
   Platform as RNPlatform,
@@ -18,10 +20,12 @@ import {
   View,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 import { BorderRadius, Colors, FontSize, PLATFORM_COLORS, STYLE_COLORS, Spacing } from '../constants/theme';
+import { EXTERNAL_STORES, ExternalStore, REGION_LABELS } from '../constants/marketplaces';
 import { useActiveAlertForItem, useIsPurchased, useIsWishlisted, useItem } from '../store/hooks';
 import { useStore } from '../store/useStore';
 import { FashionItem, StyleArchetype } from '../types';
@@ -33,13 +37,20 @@ import ProductImage from '../components/common/ProductImage';
 import Tag from '../components/common/Tag';
 import EmptyState from '../components/common/EmptyState';
 import ScreenHeader from '../components/common/ScreenHeader';
-import { generateForecast, getDealScore, getOptimalPurchaseWindow, getPredictionConfidence } from '../services/priceEngine';
-import { marketplaceCtaLabel, openItemOnMarketplace } from '../services/linking';
-import { WATER_LITERS_PER_KG_CO2, CO2_KG_PER_TREE_YEAR } from '../services/gamification';
+import {
+  generateForecast,
+  getDealScore,
+  getOptimalPurchaseWindow,
+  getPredictionRange,
+  historyDays,
+  priceChangeSinceFirst,
+} from '../services/priceEngine';
+import { externalSearchUrl, marketplaceCtaLabel, openItemOnMarketplace, openUrl, searchQueryFor } from '../services/linking';
+import { CO2_KG_PER_TREE_YEAR, NEW_ITEM_FOOTPRINT_KG, WATER_LITERS_PER_KG_CO2 } from '../services/sustainability';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 import { confirmAction, notify } from '../utils/dialog';
-import { formatDate } from '../utils/date';
-import { formatNumber, formatPrice, parsePriceInput, percentOff } from '../utils/format';
+import { formatDate, formatShortDate } from '../utils/date';
+import { currencySymbol, formatMoney, formatNumber, formatRelativeTime, parsePriceInput, percentOff } from '../utils/format';
 
 const CONDITION_SCORE: Record<string, number> = {
   'New with tags': 100,
@@ -70,6 +81,12 @@ function getStylingTips(item: FashionItem): string[] {
   return tips.slice(0, 4);
 }
 
+/** Suggested alert target: the forecast low when prices are falling, otherwise 10% off. */
+function suggestTarget(item: FashionItem, forecastLow: number | null): number {
+  const raw = forecastLow !== null && forecastLow < item.currentPrice ? forecastLow : item.currentPrice * 0.9;
+  return item.currency === 'INR' ? Math.max(1, Math.floor(raw)) : Math.max(0.01, Math.floor(raw * 100) / 100);
+}
+
 const USE_NATIVE_DRIVER = RNPlatform.OS !== 'web';
 type TabKey = 'overview' | 'price' | 'style';
 const TABS: { key: TabKey; label: string }[] = [
@@ -78,24 +95,92 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'style', label: 'Style Fit' },
 ];
 
+/** live: just re-checked on the marketplace · recent: checked in the last few minutes · stale: couldn't re-check. */
+type LiveState = 'checking' | 'live' | 'recent' | 'stale' | 'off';
+
+/** Re-checks the listing on its marketplace once when the screen opens. */
+function useLiveCheck(itemId: string | undefined): LiveState {
+  const checkItemLive = useStore((s) => s.checkItemLive);
+  const [state, setState] = useState<LiveState>(itemId ? 'checking' : 'off');
+
+  useEffect(() => {
+    if (!itemId) return;
+    let active = true;
+    setState('checking');
+    checkItemLive(itemId)
+      .then((result) => {
+        if (!active) return;
+        if (!result) setState('off');
+        else setState(result.checked === 'unavailable' ? 'stale' : result.checked);
+      })
+      .catch(() => {
+        if (active) setState('stale');
+      });
+    return () => {
+      active = false;
+    };
+  }, [itemId, checkItemLive]);
+
+  return state;
+}
+
 export default function ItemDetailScreen() {
   const route = useRoute<RouteProp<{ ItemDetail: ItemDetailParams }, 'ItemDetail'>>();
   const navigation = useNavigation();
-  const item = useItem(route.params?.itemId);
+  const itemId = route.params?.itemId;
+  const item = useItem(itemId);
+  const live = useLiveCheck(itemId);
 
   if (!item) {
+    if (live === 'checking') {
+      return (
+        <View style={styles.container}>
+          <ScreenHeader title="Loading…" onBack={() => navigation.goBack()} />
+          <View style={styles.loading} accessibilityLabel="Loading listing">
+            <ActivityIndicator color={Colors.primaryLight} />
+            <Text style={styles.helperText}>Fetching the live listing…</Text>
+          </View>
+        </View>
+      );
+    }
     return (
       <View style={styles.container}>
         <ScreenHeader title="Item not found" onBack={() => navigation.goBack()} />
-        <EmptyState icon="alert-circle-outline" title="This listing is no longer available" message="It may have been sold or removed." />
+        <EmptyState
+          icon="alert-circle-outline"
+          title="This listing isn’t available"
+          message="It may have been sold or removed from the marketplace, or you may be offline."
+        />
       </View>
     );
   }
   // Keyed by item so a different item never inherits another item's local state.
-  return <ItemDetailContent key={item.id} item={item} />;
+  return <ItemDetailContent key={item.id} item={item} live={live} />;
 }
 
-function ItemDetailContent({ item }: { item: FashionItem }) {
+function LiveLine({ item, live }: { item: FashionItem; live: LiveState }) {
+  if (live === 'off') return null;
+  if (live === 'checking') {
+    return (
+      <View style={styles.liveRow} accessibilityLabel={`Checking the live price on ${item.platform}`}>
+        <ActivityIndicator size="small" color={Colors.textMuted} />
+        <Text style={styles.liveText}>Checking the live price on {item.platform}…</Text>
+      </View>
+    );
+  }
+  const fresh = live === 'live' || live === 'recent';
+  const text = fresh
+    ? `Live price from ${item.platform} · checked ${formatRelativeTime(item.lastChecked)}`
+    : `Couldn’t reach ${item.platform} — showing the price recorded ${formatRelativeTime(item.lastChecked)}`;
+  return (
+    <View style={styles.liveRow} accessibilityLabel={text}>
+      <View style={[styles.liveDot, { backgroundColor: fresh ? Colors.success : Colors.warning }]} />
+      <Text style={[styles.liveText, !fresh && { color: Colors.warning }]}>{text}</Text>
+    </View>
+  );
+}
+
+function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState }) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const keyboardHeight = useKeyboardHeight();
@@ -122,13 +207,20 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
   const [headerVisible, setHeaderVisible] = useState(false);
 
+  const money = useCallback((value: number) => formatMoney(value, item.currency), [item.currency]);
   const dealScore = getDealScore(item);
   const savingsPercent = percentOff(item.currentPrice, item.originalPrice);
+  const retailLabel = item.source === 'flipkart' ? 'MRP' : 'retail';
   const forecast = useMemo(() => generateForecast(item, 30), [item]);
   const optimal = useMemo(() => getOptimalPurchaseWindow(item), [item]);
-  const conf7d = useMemo(() => getPredictionConfidence(item, 7), [item]);
-  const conf30d = useMemo(() => getPredictionConfidence(item, 30), [item]);
-  const suggestedTarget = optimal.bestDay > 0 ? optimal.bestPrice : Math.round(item.currentPrice * 90) / 100;
+  const range7d = useMemo(() => getPredictionRange(item, 7), [item]);
+  const range30d = useMemo(() => getPredictionRange(item, 30), [item]);
+  const trackedDays = historyDays(item.priceHistory);
+  const change = useMemo(() => priceChangeSinceFirst(item.priceHistory), [item.priceHistory]);
+  const suggestedTarget = suggestTarget(item, optimal.hasForecast && optimal.bestDay > 0 ? optimal.bestPrice : null);
+  const searchQuery = useMemo(() => searchQueryFor(item), [item]);
+  const newFootprint = NEW_ITEM_FOOTPRINT_KG[item.category];
+  const byline = [item.brand, item.seller ? `sold by ${item.seller}` : null].filter(Boolean).join(' · ') || item.platform;
 
   // ---- Scroll-linked header ----
   const scrollY = useRef(new Animated.Value(0)).current;
@@ -162,7 +254,7 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
     const trimmed = alertInput.trim();
     const target = trimmed ? parsePriceInput(trimmed) : suggestedTarget;
     if (target === null) {
-      notify('Invalid price', 'Enter a price like 24.99.');
+      notify('Invalid price', `Enter a price like ${money(suggestedTarget)}.`);
       return;
     }
     const result = addPriceAlert(item.id, target);
@@ -174,7 +266,7 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
     setAlertInput('');
     notify(
       '🔔 Price alert set',
-      `We'll let you know when "${item.title}" drops to ${formatPrice(result.alert.targetPrice)} or less. Prices are checked whenever you open VibeVault.`,
+      `We'll let you know when "${item.title}" drops to ${money(result.alert.targetPrice)} or less on ${item.platform}. Prices are checked whenever you open VibeVault.`,
     );
   };
 
@@ -184,8 +276,11 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
 
   const handleLogPurchase = () => {
     const logged = logPurchase(item.id);
-    if (logged) {
-      notify('🌱 Nice find!', `${logged.co2Saved} kg of CO₂ saved has been added to your Eco Impact.`);
+    if (!logged) return;
+    if (logged.secondhand) {
+      notify('🌱 Nice find!', `About ${logged.co2Saved} kg of CO₂ saved has been added to your Eco Impact.`);
+    } else {
+      notify('Purchase logged', 'Added to your purchases. Only pre-owned finds count toward CO₂ saved.');
     }
   };
 
@@ -201,7 +296,12 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
 
   const handleOpenMarketplace = async () => {
     const opened = await openItemOnMarketplace(item);
-    if (!opened) notify('Unable to open link', 'Could not open this marketplace on your device.');
+    if (!opened) notify('Unable to open link', `Could not open ${item.platform} on your device.`);
+  };
+
+  const handleSearchStore = async (store: ExternalStore) => {
+    const opened = await openUrl(externalSearchUrl(store, searchQuery));
+    if (!opened) notify('Unable to open link', `Could not open ${store} on your device.`);
   };
 
   const goToProfiler = () => navigation.navigate('Profiler');
@@ -268,7 +368,7 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
 
           <View style={[styles.platformBadge, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}>
             <Text style={styles.platformText}>
-              {item.platform} · {item.region}
+              {item.platform} · {REGION_LABELS[item.region]}
             </Text>
           </View>
 
@@ -293,18 +393,25 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
 
         {/* Title & price */}
         <View style={styles.titleSection}>
+          {!item.available && (
+            <View style={styles.unavailableBanner} accessibilityRole="alert">
+              <Ionicons name="alert-circle-outline" size={18} color={Colors.warning} />
+              <Text style={styles.unavailableText}>
+                No longer available on {item.platform} — it may have sold out. Last recorded price {money(item.currentPrice)}.
+              </Text>
+            </View>
+          )}
+
           <View style={styles.titleRow}>
             <View style={styles.titleLeft}>
               <Text style={styles.itemTitle}>{item.title}</Text>
-              <Text style={styles.brandText}>
-                {item.brand} · sold by {item.seller}
-              </Text>
+              <Text style={styles.brandText}>{byline}</Text>
             </View>
             <View style={styles.priceStack}>
-              <Text style={styles.currentPrice}>{formatPrice(item.currentPrice)}</Text>
-              {savingsPercent > 0 && (
+              <Text style={[styles.currentPrice, !item.available && styles.priceUnavailable]}>{money(item.currentPrice)}</Text>
+              {savingsPercent > 0 && item.originalPrice !== null && (
                 <>
-                  <Text style={styles.originalPrice}>{formatPrice(item.originalPrice)}</Text>
+                  <Text style={styles.originalPrice}>{money(item.originalPrice)}</Text>
                   <View style={styles.savingsBadge}>
                     <Text style={styles.savingsText}>-{savingsPercent}%</Text>
                   </View>
@@ -313,21 +420,23 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
             </View>
           </View>
 
+          <LiveLine item={item} live={live} />
+
           <View style={styles.metaRow}>
+            {item.size && (
+              <View style={styles.metaChip}>
+                <Text style={styles.metaChipText}>📏 {item.size}</Text>
+              </View>
+            )}
             <View style={styles.metaChip}>
-              <Text style={styles.metaChipText}>📏 {item.size}</Text>
-            </View>
-            <View style={styles.metaChip}>
-              <Text style={styles.metaChipText}>✨ {item.condition}</Text>
+              <Text style={styles.metaChipText}>✨ {item.secondhand ? `Pre-owned · ${item.condition}` : 'New'}</Text>
             </View>
             <View style={styles.metaChip}>
               <Text style={styles.metaChipText}>📦 {item.category}</Text>
             </View>
-            {item.distance !== undefined && (
-              <View style={styles.metaChip}>
-                <Text style={styles.metaChipText}>📍 {item.distance} km away</Text>
-              </View>
-            )}
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipText}>📍 {REGION_LABELS[item.region]}</Text>
+            </View>
           </View>
 
           <View style={styles.tagRow}>
@@ -359,21 +468,36 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
           <View style={styles.tabContent}>
             <GradientCard style={styles.section}>
               <Text style={styles.sectionTitle}>About This Item</Text>
-              <Text style={styles.description}>{item.description}</Text>
+              <Text style={styles.description}>{item.description ?? `No description was provided on ${item.platform}.`}</Text>
+              {item.listedDate && (
+                <View style={styles.listingRow}>
+                  <Text style={styles.listingLabel}>Listed</Text>
+                  <Text style={styles.listingValue}>{formatDate(item.listedDate)}</Text>
+                </View>
+              )}
               <View style={styles.listingRow}>
-                <Text style={styles.listingLabel}>Listed</Text>
-                <Text style={styles.listingValue}>{formatDate(item.listedDate)}</Text>
+                <Text style={styles.listingLabel}>Tracked since</Text>
+                <Text style={styles.listingValue}>{formatDate(item.firstSeen)}</Text>
               </View>
-              <View style={styles.listingRow}>
-                <Text style={styles.listingLabel}>Seller</Text>
-                <Text style={[styles.listingValue, { color: Colors.primaryLight }]}>{item.seller}</Text>
-              </View>
+              {item.seller && (
+                <View style={styles.listingRow}>
+                  <Text style={styles.listingLabel}>Seller</Text>
+                  <Text style={[styles.listingValue, styles.listingValueShrink, { color: Colors.primaryLight }]} numberOfLines={1}>
+                    {item.seller}
+                  </Text>
+                </View>
+              )}
               <View style={styles.listingRow}>
                 <Text style={styles.listingLabel}>Marketplace</Text>
                 <Text style={styles.listingValue}>
-                  {item.platform} ({item.region})
+                  {item.platform} ({REGION_LABELS[item.region]})
                 </Text>
               </View>
+              {item.currency !== 'INR' && (
+                <Text style={styles.smallNote}>
+                  Priced in {item.currency} by the seller. Shipping, customs and conversion fees are shown on {item.platform} at checkout.
+                </Text>
+              )}
             </GradientCard>
 
             <GradientCard style={styles.section}>
@@ -388,7 +512,7 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
                   <Text style={styles.metricLabel}>Eco Score</Text>
                 </View>
                 <View style={styles.metricCard}>
-                  <Text style={[styles.metricBig, { color: Colors.accent }]}>{item.co2Saved}kg</Text>
+                  <Text style={[styles.metricBig, { color: Colors.accent }]}>{item.secondhand ? `${item.co2Saved}kg` : '—'}</Text>
                   <Text style={styles.metricLabel}>CO₂ Saved</Text>
                 </View>
                 <View style={styles.metricCard}>
@@ -396,34 +520,59 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
                   <Text style={styles.metricLabel}>Vibe Match</Text>
                 </View>
               </View>
-              <Text style={styles.barLabel}>Discount vs retail · {savingsPercent}%</Text>
-              <ProgressBar progress={savingsPercent} height={8} gradient={Colors.gradientPrimary} accessibilityLabel="Discount versus retail" />
+              {item.originalPrice !== null && (
+                <>
+                  <Text style={styles.barLabel}>
+                    Discount vs {retailLabel} · {savingsPercent}%
+                  </Text>
+                  <ProgressBar
+                    progress={savingsPercent}
+                    height={8}
+                    gradient={Colors.gradientPrimary}
+                    accessibilityLabel={`Discount versus ${retailLabel}`}
+                  />
+                </>
+              )}
               <Text style={styles.barLabel}>Sustainability · {item.sustainabilityScore}/100</Text>
               <ProgressBar progress={item.sustainabilityScore} height={8} gradient={Colors.gradientEco} accessibilityLabel="Sustainability" />
-              <Text style={styles.barLabel}>Condition · {item.condition}</Text>
-              <ProgressBar progress={CONDITION_SCORE[item.condition] ?? 50} height={8} gradient={Colors.gradientAccent} accessibilityLabel="Condition" />
+              {item.secondhand && (
+                <>
+                  <Text style={styles.barLabel}>Condition · {item.condition}</Text>
+                  <ProgressBar progress={CONDITION_SCORE[item.condition] ?? 50} height={8} gradient={Colors.gradientAccent} accessibilityLabel="Condition" />
+                </>
+              )}
             </GradientCard>
 
             <GradientCard style={styles.section} gradient={Colors.gradientEco}>
               <Text style={styles.sectionTitle}>Eco Impact</Text>
-              <Text style={styles.ecoDesc}>Choosing this pre-loved piece over buying new saves roughly:</Text>
-              <View style={styles.ecoItems}>
-                <View style={styles.ecoItem}>
-                  <Text style={styles.ecoEmoji}>💨</Text>
-                  <Text style={styles.ecoValue}>{item.co2Saved} kg</Text>
-                  <Text style={styles.ecoUnit}>CO₂ emissions</Text>
-                </View>
-                <View style={styles.ecoItem}>
-                  <Text style={styles.ecoEmoji}>💧</Text>
-                  <Text style={styles.ecoValue}>{formatNumber(item.co2Saved * WATER_LITERS_PER_KG_CO2)} L</Text>
-                  <Text style={styles.ecoUnit}>Water</Text>
-                </View>
-                <View style={styles.ecoItem}>
-                  <Text style={styles.ecoEmoji}>🌱</Text>
-                  <Text style={styles.ecoValue}>{(item.co2Saved / CO2_KG_PER_TREE_YEAR).toFixed(2)}</Text>
-                  <Text style={styles.ecoUnit}>Tree-years of CO₂</Text>
-                </View>
-              </View>
+              {item.secondhand ? (
+                <>
+                  <Text style={styles.ecoDesc}>Choosing this pre-loved piece over buying new saves roughly:</Text>
+                  <View style={styles.ecoItems}>
+                    <View style={styles.ecoItem}>
+                      <Text style={styles.ecoEmoji}>💨</Text>
+                      <Text style={styles.ecoValue}>{item.co2Saved} kg</Text>
+                      <Text style={styles.ecoUnit}>CO₂ emissions</Text>
+                    </View>
+                    <View style={styles.ecoItem}>
+                      <Text style={styles.ecoEmoji}>💧</Text>
+                      <Text style={styles.ecoValue}>{formatNumber(item.co2Saved * WATER_LITERS_PER_KG_CO2)} L</Text>
+                      <Text style={styles.ecoUnit}>Water</Text>
+                    </View>
+                    <View style={styles.ecoItem}>
+                      <Text style={styles.ecoEmoji}>🌱</Text>
+                      <Text style={styles.ecoValue}>{(item.co2Saved / CO2_KG_PER_TREE_YEAR).toFixed(2)}</Text>
+                      <Text style={styles.ecoUnit}>Tree-years of CO₂</Text>
+                    </View>
+                  </View>
+                  <Text style={[styles.ecoDesc, styles.ecoFootnote]}>Typical figures for the category; estimates, not measurements.</Text>
+                </>
+              ) : (
+                <Text style={styles.ecoDesc}>
+                  This is a new item. Making a new piece in {item.category.toLowerCase()} typically emits around {newFootprint} kg of CO₂ — a
+                  pre-owned find avoids most of that. Try the pre-owned listings from eBay in Discover.
+                </Text>
+              )}
             </GradientCard>
 
             <GradientCard style={styles.section}>
@@ -431,7 +580,8 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
               {isPurchased && purchase ? (
                 <>
                   <Text style={styles.purchasedText}>
-                    ✅ Logged on {formatDate(purchase.purchasedAt)} for {formatPrice(purchase.pricePaid)} — counted in your Eco Impact.
+                    ✅ Logged on {formatDate(purchase.purchasedAt)} for {formatMoney(purchase.pricePaid, purchase.currency)}
+                    {purchase.secondhand ? ' — counted in your Eco Impact.' : '.'}
                   </Text>
                   <TouchableOpacity onPress={handleUndoPurchase} style={styles.secondaryBtn} accessibilityRole="button">
                     <Text style={styles.secondaryBtnText}>Undo purchase</Text>
@@ -439,10 +589,14 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
                 </>
               ) : (
                 <>
-                  <Text style={styles.helperText}>Log your purchase to track the CO₂, water and money you’ve saved by thrifting.</Text>
+                  <Text style={styles.helperText}>
+                    {item.secondhand
+                      ? 'Bought it on ' + item.platform + '? Log it to track the CO₂, water and money you’ve saved by thrifting.'
+                      : 'Bought it on ' + item.platform + '? Log it to keep track of what you’ve spent and saved.'}
+                  </Text>
                   <TouchableOpacity onPress={handleLogPurchase} activeOpacity={0.85} accessibilityRole="button">
                     <LinearGradient colors={Colors.gradientEco} style={styles.primaryBtn}>
-                      <Text style={styles.primaryBtnText}>Log Purchase at {formatPrice(item.currentPrice)}</Text>
+                      <Text style={styles.primaryBtnText}>Log Purchase at {money(item.currentPrice)}</Text>
                     </LinearGradient>
                   </TouchableOpacity>
                 </>
@@ -454,61 +608,74 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
         {activeTab === 'price' && (
           <View style={styles.tabContent}>
             <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>Price History & Forecast</Text>
-              <PriceChart history={item.priceHistory} forecast={forecast} height={160} />
+              <Text style={styles.sectionTitle}>{forecast.length > 0 ? 'Price History & Forecast' : 'Price History'}</Text>
+              <PriceChart history={item.priceHistory} forecast={forecast} currency={item.currency} height={160} />
+              <Text style={styles.smallNote}>
+                Recorded daily from {item.platform} · {trackedDays} day{trackedDays === 1 ? '' : 's'} of data
+                {change && change.percent !== 0
+                  ? ` · ${change.percent < 0 ? '▼' : '▲'} ${Math.abs(change.percent)}% since ${formatShortDate(change.since)}`
+                  : ''}
+              </Text>
             </GradientCard>
 
-            <GradientCard style={styles.section} gradient={Colors.gradientEco}>
+            <GradientCard style={styles.section} gradient={optimal.hasForecast ? Colors.gradientEco : undefined}>
               <Text style={styles.sectionTitle}>Best Time to Buy</Text>
-              <Text style={styles.recommendation}>{optimal.recommendation}</Text>
-              <View style={styles.optimalGrid}>
-                <View style={styles.optimalItem}>
-                  <Text style={styles.optimalLabel}>Best Price</Text>
-                  <Text style={styles.optimalValue}>{formatPrice(optimal.bestPrice)}</Text>
+              <Text style={[styles.recommendation, !optimal.hasForecast && styles.recommendationMuted]}>{optimal.recommendation}</Text>
+              {optimal.hasForecast && (
+                <View style={styles.optimalGrid}>
+                  <View style={styles.optimalItem}>
+                    <Text style={styles.optimalLabel}>Best Price</Text>
+                    <Text style={styles.optimalValue}>{money(optimal.bestPrice)}</Text>
+                  </View>
+                  <View style={styles.optimalItem}>
+                    <Text style={styles.optimalLabel}>Savings</Text>
+                    <Text style={styles.optimalValue}>{money(optimal.savings)}</Text>
+                  </View>
+                  <View style={styles.optimalItem}>
+                    <Text style={styles.optimalLabel}>When</Text>
+                    <Text style={styles.optimalValue}>{optimal.bestDay === 0 ? 'Now' : `In ${optimal.bestDay}d`}</Text>
+                  </View>
+                  <View style={styles.optimalItem}>
+                    <Text style={styles.optimalLabel}>Save</Text>
+                    <Text style={styles.optimalValue}>{optimal.savingsPercent}%</Text>
+                  </View>
                 </View>
-                <View style={styles.optimalItem}>
-                  <Text style={styles.optimalLabel}>Savings</Text>
-                  <Text style={styles.optimalValue}>{formatPrice(optimal.savings)}</Text>
-                </View>
-                <View style={styles.optimalItem}>
-                  <Text style={styles.optimalLabel}>When</Text>
-                  <Text style={styles.optimalValue}>{optimal.bestDay === 0 ? 'Today' : `In ${optimal.bestDay}d`}</Text>
-                </View>
-                <View style={styles.optimalItem}>
-                  <Text style={styles.optimalLabel}>Save</Text>
-                  <Text style={styles.optimalValue}>{optimal.savingsPercent}%</Text>
-                </View>
-              </View>
+              )}
             </GradientCard>
 
-            <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>Price Predictions</Text>
-              <View style={styles.predRow}>
-                {[
-                  { label: 'In 7 days', conf: conf7d },
-                  { label: 'In 30 days', conf: conf30d },
-                ].map(({ label, conf }, index) => (
-                  <React.Fragment key={label}>
-                    {index > 0 && <View style={styles.predDivider} />}
-                    <View style={styles.predBox}>
-                      <Text style={styles.predDays}>{label}</Text>
-                      <Text style={styles.predPrice}>{formatPrice(conf.predicted)}</Text>
-                      <Text style={styles.predRange}>
-                        {formatPrice(conf.low)} – {formatPrice(conf.high)}
-                      </Text>
-                      <Text style={styles.predCi}>expected range</Text>
-                      {conf.predicted < item.currentPrice - 0.005 ? (
-                        <Text style={styles.predDown}>▼ Likely to drop</Text>
-                      ) : conf.predicted > item.currentPrice + 0.005 ? (
-                        <Text style={styles.predUp}>▲ Likely to rise</Text>
-                      ) : (
-                        <Text style={styles.predFlat}>● Holding steady</Text>
-                      )}
-                    </View>
-                  </React.Fragment>
-                ))}
-              </View>
-            </GradientCard>
+            {range7d && range30d && (
+              <GradientCard style={styles.section}>
+                <Text style={styles.sectionTitle}>Price Predictions</Text>
+                <View style={styles.predRow}>
+                  {[
+                    { label: 'In 7 days', range: range7d },
+                    { label: 'In 30 days', range: range30d },
+                  ].map(({ label, range }, index) => (
+                    <React.Fragment key={label}>
+                      {index > 0 && <View style={styles.predDivider} />}
+                      <View style={styles.predBox}>
+                        <Text style={styles.predDays}>{label}</Text>
+                        <Text style={styles.predPrice}>{money(range.predicted)}</Text>
+                        <Text style={styles.predRange}>
+                          {money(range.low)} – {money(range.high)}
+                        </Text>
+                        <Text style={styles.predCi}>likely range</Text>
+                        {range.predicted < item.currentPrice * 0.995 ? (
+                          <Text style={styles.predDown}>▼ Trending down</Text>
+                        ) : range.predicted > item.currentPrice * 1.005 ? (
+                          <Text style={styles.predUp}>▲ Trending up</Text>
+                        ) : (
+                          <Text style={styles.predFlat}>● Holding steady</Text>
+                        )}
+                      </View>
+                    </React.Fragment>
+                  ))}
+                </View>
+                <Text style={styles.smallNote}>
+                  Projected from {trackedDays} days of recorded prices. Sellers can change prices at any time, so treat this as a guide.
+                </Text>
+              </GradientCard>
+            )}
 
             <GradientCard style={styles.section}>
               <Text style={styles.sectionTitle}>Price Alert</Text>
@@ -516,31 +683,35 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
                 <Text style={styles.helperText}>You’ve already bought this item, so alerts are turned off.</Text>
               ) : activeAlert ? (
                 <View style={styles.alertActive}>
-                  <Text style={styles.alertActiveText}>🔔 Alert set for {formatPrice(activeAlert.targetPrice)} or less</Text>
-                  <Text style={styles.alertActiveMeta}>Created {formatDate(activeAlert.createdAt)} at {formatPrice(activeAlert.priceAtCreation)}</Text>
+                  <Text style={styles.alertActiveText}>🔔 Alert set for {formatMoney(activeAlert.targetPrice, activeAlert.currency)} or less</Text>
+                  <Text style={styles.alertActiveMeta}>
+                    Created {formatDate(activeAlert.createdAt)} at {formatMoney(activeAlert.priceAtCreation, activeAlert.currency)}
+                  </Text>
                   <TouchableOpacity onPress={handleRemoveAlert} style={styles.secondaryBtn} accessibilityRole="button">
                     <Text style={styles.secondaryBtnText}>Remove alert</Text>
                   </TouchableOpacity>
                 </View>
+              ) : !item.available ? (
+                <Text style={styles.helperText}>This listing is no longer available, so a price alert can’t be set.</Text>
               ) : (
                 <>
                   <Text style={styles.helperText}>
-                    Get alerted when the price drops to your target. Suggested target: {formatPrice(suggestedTarget)}.
+                    Get alerted when the {item.platform} price drops to your target. Suggested target: {money(suggestedTarget)}.
                   </Text>
                   <View style={styles.alertInputRow}>
-                    <Text style={styles.alertDollar}>$</Text>
+                    <Text style={styles.alertDollar}>{currencySymbol(item.currency).trim()}</Text>
                     <TextInput
                       style={styles.alertInput}
                       keyboardType="decimal-pad"
-                      placeholder={suggestedTarget.toFixed(2)}
+                      placeholder={item.currency === 'INR' ? String(suggestedTarget) : suggestedTarget.toFixed(2)}
                       placeholderTextColor={Colors.textMuted}
                       value={alertInput}
                       onChangeText={setAlertInput}
                       onFocus={() => setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 250)}
                       onSubmitEditing={handleSetAlert}
                       returnKeyType="done"
-                      maxLength={10}
-                      accessibilityLabel="Target price in dollars"
+                      maxLength={12}
+                      accessibilityLabel={`Target price in ${item.currency}`}
                     />
                     <TouchableOpacity onPress={handleSetAlert} activeOpacity={0.85} accessibilityRole="button">
                       <LinearGradient colors={Colors.gradientPrimary} style={styles.alertBtn}>
@@ -550,6 +721,27 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
                   </View>
                 </>
               )}
+            </GradientCard>
+
+            <GradientCard style={styles.section}>
+              <Text style={styles.sectionTitle}>Compare Elsewhere</Text>
+              <Text style={styles.helperText}>
+                These stores don’t publish prices for apps, so VibeVault can’t track them — tap one to search it for this item.
+              </Text>
+              <View style={styles.storeChips}>
+                {EXTERNAL_STORES.map((store) => (
+                  <TouchableOpacity
+                    key={store}
+                    style={[styles.storeChip, { borderColor: (PLATFORM_COLORS[store] || Colors.border) + '80' }]}
+                    onPress={() => handleSearchStore(store)}
+                    accessibilityRole="link"
+                    accessibilityLabel={`Search ${store} for this item`}
+                  >
+                    <Text style={styles.storeChipText}>{store}</Text>
+                    <Ionicons name="open-outline" size={12} color={Colors.textMuted} />
+                  </TouchableOpacity>
+                ))}
+              </View>
             </GradientCard>
           </View>
         )}
@@ -605,14 +797,16 @@ function ItemDetailContent({ item }: { item: FashionItem }) {
               ))}
             </GradientCard>
 
-            <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>Color Palette</Text>
-              <View style={styles.colorsRow}>
-                {item.colors.map((c, i) => (
-                  <View key={`${c}-${i}`} style={[styles.colorSwatch, { backgroundColor: c }]} accessibilityLabel={`Colour ${c}`} />
-                ))}
-              </View>
-            </GradientCard>
+            {item.colors.length > 0 && (
+              <GradientCard style={styles.section}>
+                <Text style={styles.sectionTitle}>Color Palette</Text>
+                <View style={styles.colorsRow}>
+                  {item.colors.map((c, i) => (
+                    <View key={`${c}-${i}`} style={[styles.colorSwatch, { backgroundColor: c }]} accessibilityLabel={`Colour ${c}`} />
+                  ))}
+                </View>
+              </GradientCard>
+            )}
 
             <GradientCard style={styles.section}>
               <Text style={styles.sectionTitle}>Styling Tips</Text>
@@ -841,4 +1035,38 @@ const styles = StyleSheet.create({
   ctaWishlistText: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: '700' },
   ctaBuy: { paddingVertical: Spacing.md, borderRadius: BorderRadius.md, alignItems: 'center', justifyContent: 'center' },
   ctaBuyText: { color: '#fff', fontSize: FontSize.md, fontWeight: '800' },
+
+  loading: { alignItems: 'center', paddingVertical: Spacing.xxxl, gap: Spacing.md },
+  liveRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, marginBottom: Spacing.sm },
+  liveDot: { width: 8, height: 8, borderRadius: 4 },
+  liveText: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600', flexShrink: 1 },
+  unavailableBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.sm,
+    backgroundColor: Colors.warning + '1A',
+    borderColor: Colors.warning + '55',
+    borderWidth: 1,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+    marginBottom: Spacing.md,
+  },
+  unavailableText: { flex: 1, color: Colors.warning, fontSize: FontSize.sm, fontWeight: '600', lineHeight: 19 },
+  priceUnavailable: { color: Colors.textMuted, textDecorationLine: 'line-through' },
+  listingValueShrink: { flexShrink: 1, marginLeft: Spacing.md, textAlign: 'right' },
+  smallNote: { color: Colors.textMuted, fontSize: FontSize.xs, lineHeight: 17, marginTop: Spacing.sm },
+  ecoFootnote: { fontSize: FontSize.xs, opacity: 0.8, marginTop: Spacing.md, marginBottom: 0 },
+  recommendationMuted: { color: Colors.textSecondary, marginBottom: 0 },
+  storeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  storeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: 6,
+    borderRadius: BorderRadius.full,
+    borderWidth: 1,
+    backgroundColor: Colors.surfaceLight,
+  },
+  storeChipText: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: '600' },
 });

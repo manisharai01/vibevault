@@ -9,14 +9,20 @@ import { LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Defs, Line, LinearGradient as SvgGradient, Path, Stop } from 'react-native-svg';
 import { Colors, FontSize, Spacing } from '../../constants/theme';
 import { PricePoint } from '../../types';
-import { formatPriceRounded } from '../../utils/format';
+import { formatShortDate } from '../../utils/date';
+import { currencySymbol, formatMoney } from '../../utils/format';
 
 const PAD = { top: 12, right: 12, bottom: 8, left: 44 };
 
 interface PriceChartProps {
   history: PricePoint[];
   forecast?: PricePoint[];
+  currency: string;
   height?: number;
+}
+
+function axisMoney(value: number, currency: string): string {
+  return currency === 'INR' ? formatMoney(Math.round(value), 'INR') : `${currencySymbol(currency)}${Math.round(value)}`;
 }
 
 type Point = { x: number; y: number };
@@ -40,13 +46,19 @@ function fillPath(points: Point[], bottom: number): string {
   return `${smoothPath(points)} L ${last} ${bottom} L ${first} ${bottom} Z`;
 }
 
-export default function PriceChart({ history, forecast = [], height = 140 }: PriceChartProps) {
+export default function PriceChart({ history, forecast = [], currency, height = 140 }: PriceChartProps) {
   const [width, setWidth] = useState(0);
   const onLayout = (e: LayoutChangeEvent) => setWidth(Math.round(e.nativeEvent.layout.width));
 
   const all = [...history, ...forecast];
   if (all.length < 2) {
-    return <Text style={styles.noData}>Not enough price data yet.</Text>;
+    return (
+      <Text style={styles.noData}>
+        {history.length === 1
+          ? `Tracking started ${formatShortDate(history[0].date)} at ${formatMoney(history[0].price, currency)}. The chart fills in as prices are recorded each day.`
+          : 'No price history recorded yet.'}
+      </Text>
+    );
   }
 
   const prices = all.map((p) => p.price);
@@ -70,8 +82,8 @@ export default function PriceChart({ history, forecast = [], height = 140 }: Pri
   const lastForecast = forecast[forecast.length - 1]?.price;
   const summary =
     current !== undefined
-      ? `Price chart. Current price ${formatPriceRounded(current)}${
-          lastForecast !== undefined ? `, forecast ${formatPriceRounded(lastForecast)} in ${forecast.length} days` : ''
+      ? `Price chart. Latest price ${formatMoney(current, currency)}${
+          lastForecast !== undefined ? `, forecast ${formatMoney(lastForecast, currency)} in ${forecast.length} days` : ''
         }.`
       : 'Price chart.';
 
@@ -135,16 +147,22 @@ export default function PriceChart({ history, forecast = [], height = 140 }: Pri
           <View style={[StyleSheet.absoluteFill, styles.noPointer]}>
             {gridPrices.map((gp, i) => (
               <Text key={i} style={[styles.yLabel, { top: y(gp) - 7 }]}>
-                {formatPriceRounded(gp)}
+                {axisMoney(gp, currency)}
               </Text>
             ))}
           </View>
 
           {/* X-axis labels */}
           <View style={styles.dateRow}>
-            <Text style={[styles.dateText, { left: PAD.left }]}>{history.length > 1 ? `${history.length - 1}d ago` : ''}</Text>
-            {forecast.length > 0 && (
-              <Text style={[styles.dateText, styles.todayText, { left: Math.max(PAD.left, Math.min(splitX - 18, width - 80)) }]}>Today</Text>
+            <Text style={[styles.dateText, { left: PAD.left }]}>{history[0] ? formatShortDate(history[0].date) : ''}</Text>
+            {forecast.length > 0 ? (
+              <Text style={[styles.dateText, styles.todayText, { left: Math.max(PAD.left + 44, Math.min(splitX - 18, width - 80)) }]}>
+                Latest
+              </Text>
+            ) : (
+              history.length > 1 && (
+                <Text style={[styles.dateText, { right: PAD.right }]}>{formatShortDate(history[history.length - 1].date)}</Text>
+              )
             )}
             {forecast.length > 0 && <Text style={[styles.dateText, styles.forecastText, { right: PAD.right }]}>+{forecast.length}d</Text>}
           </View>
@@ -156,7 +174,7 @@ export default function PriceChart({ history, forecast = [], height = 140 }: Pri
               <View style={[styles.legendLine, { backgroundColor: Colors.accent, marginLeft: Spacing.md }]} />
               <Text style={styles.legendText}>Forecast</Text>
               <View style={[styles.legendDot, { backgroundColor: Colors.warning, marginLeft: Spacing.md }]} />
-              <Text style={styles.legendText}>Today</Text>
+              <Text style={styles.legendText}>Latest</Text>
             </View>
           )}
         </>

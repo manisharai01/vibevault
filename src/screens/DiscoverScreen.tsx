@@ -14,7 +14,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useShallow } from 'zustand/react/shallow';
 import { BorderRadius, Colors, FontSize, PLATFORM_COLORS, STYLE_COLORS, Shadows, Spacing } from '../constants/theme';
-import { CATEGORIES, PLATFORMS, REGIONS } from '../constants/marketplaces';
+import { CATEGORIES, PLATFORMS, REGION_LABELS, REGIONS } from '../constants/marketplaces';
+import { useAvailableItems } from '../store/hooks';
 import { useStore } from '../store/useStore';
 import { FashionItem, ItemCategory, Platform, Region } from '../types';
 import { DiscoverStackParamList, RootTabParamList } from '../navigation/types';
@@ -23,9 +24,11 @@ import ChipRow from '../components/common/ChipRow';
 import EmptyState from '../components/common/EmptyState';
 import ProductImage from '../components/common/ProductImage';
 import ScreenHeader from '../components/common/ScreenHeader';
+import CatalogStatusBanner from '../components/common/CatalogStatusBanner';
+import { priceInInr } from '../services/catalog';
 import { refreshAndNotify } from '../services/lifecycle';
 import { getDealScore } from '../services/priceEngine';
-import { formatPrice, percentOff } from '../utils/format';
+import { formatMoney, percentOff } from '../utils/format';
 
 type Nav = CompositeNavigationProp<
   NativeStackNavigationProp<DiscoverStackParamList, 'DiscoverFeed'>,
@@ -46,9 +49,9 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
 
 export default function DiscoverScreen() {
   const navigation = useNavigation<Nav>();
-  const { recommendedItems, wishlist, isProfileComplete, vibeSummary, toggleWishlist } = useStore(
+  const recommendedItems = useAvailableItems();
+  const { wishlist, isProfileComplete, vibeSummary, toggleWishlist } = useStore(
     useShallow((s) => ({
-      recommendedItems: s.recommendedItems,
       wishlist: s.profile.wishlist,
       isProfileComplete: s.isProfileComplete,
       vibeSummary: s.vibeSummary,
@@ -62,11 +65,14 @@ export default function DiscoverScreen() {
   const [sortBy, setSortBy] = useState<SortKey>('match');
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
-  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mounted = useRef(true);
 
-  useEffect(() => () => {
-    if (refreshTimer.current) clearTimeout(refreshTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
 
   // "Best Match" needs a style profile; fall back to deal score until then.
   const effectiveSort: SortKey = !isProfileComplete && sortBy === 'match' ? 'deal' : sortBy;
@@ -83,7 +89,7 @@ export default function DiscoverScreen() {
       if (!q) return true;
       return (
         item.title.toLowerCase().includes(q) ||
-        item.brand.toLowerCase().includes(q) ||
+        (item.brand ?? '').toLowerCase().includes(q) ||
         item.category.toLowerCase().includes(q) ||
         item.platform.toLowerCase().includes(q) ||
         item.styleArchetypes.some((s) => s.toLowerCase().includes(q))
@@ -92,7 +98,8 @@ export default function DiscoverScreen() {
     const sorted = [...items];
     switch (effectiveSort) {
       case 'price':
-        sorted.sort((a, b) => a.currentPrice - b.currentPrice);
+        // Compare in rupees so ₹ and $ listings sort together.
+        sorted.sort((a, b) => (priceInInr(a) ?? a.currentPrice) - (priceInInr(b) ?? b.currentPrice));
         break;
       case 'sustainability':
         sorted.sort((a, b) => b.sustainabilityScore - a.sustainabilityScore);
@@ -113,12 +120,18 @@ export default function DiscoverScreen() {
     setQuery('');
   }, []);
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Same daily tasks as app start: new prices, alert checks, streak.
-    refreshAndNotify(new Date());
-    if (refreshTimer.current) clearTimeout(refreshTimer.current);
-    refreshTimer.current = setTimeout(() => setRefreshing(false), 500);
+    // Download the latest prices, then run alert checks and daily tasks.
+    try {
+      await refreshAndNotify({ force: true });
+    } finally {
+      if (mounted.current) setRefreshing(false);
+    }
+  }, []);
+
+  const retry = useCallback(() => {
+    refreshAndNotify({ force: true }).catch(() => undefined);
   }, []);
 
   const openItem = useCallback((itemId: string) => navigation.navigate('ItemDetail', { itemId }), [navigation]);
@@ -162,9 +175,10 @@ export default function DiscoverScreen() {
         selected={region}
         onSelect={setRegion}
         accessibilityLabel="Region"
-        getLabel={(r) => (r === 'All' ? 'All regions' : r)}
+        getLabel={(r) => (r === 'All' ? 'All regions' : REGION_LABELS[r])}
         compact
       />
+      {recommendedItems.length > 0 && <CatalogStatusBanner itemCount={recommendedItems.length} onRetry={retry} />}
       <View style={styles.sortRow}>
         {sortOptions.map((option) => {
           const active = effectiveSort === option.key;
@@ -198,7 +212,7 @@ export default function DiscoverScreen() {
     <View style={styles.container}>
       <ScreenHeader
         title="Discover"
-        subtitle={isProfileComplete && vibeSummary ? vibeSummary : 'Thrift finds and deals from 9 marketplaces.'}
+        subtitle={isProfileComplete && vibeSummary ? vibeSummary : 'Live deals from Flipkart and pre-owned finds from eBay.'}
       >
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={16} color={Colors.textMuted} />
@@ -234,13 +248,17 @@ export default function DiscoverScreen() {
         windowSize={7}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}
         ListEmptyComponent={
-          <EmptyState
-            icon="search-outline"
-            title="No items match your filters"
-            message="Try a different search, category, platform or region."
-            actionLabel="Clear filters"
-            onAction={clearFilters}
-          />
+          recommendedItems.length === 0 ? (
+            <CatalogStatusBanner itemCount={0} onRetry={retry} />
+          ) : (
+            <EmptyState
+              icon="search-outline"
+              title="No items match your filters"
+              message="Try a different search, category, platform or region."
+              actionLabel="Clear filters"
+              onAction={clearFilters}
+            />
+          )
         }
       />
     </View>
@@ -258,7 +276,7 @@ interface DiscoverCardProps {
 const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, showMatch, onPress, onToggleWishlist }: DiscoverCardProps) {
   const dealScore = getDealScore(item);
   const savings = percentOff(item.currentPrice, item.originalPrice);
-  const dropsSoon = item.predictedPrice7d < item.currentPrice * 0.99;
+  const dropsSoon = item.predictedPrice7d !== null && item.predictedPrice7d < item.currentPrice * 0.99;
   const matchGradient =
     item.matchScore >= 80 ? Colors.gradientEco : item.matchScore >= 60 ? Colors.gradientPrimary : Colors.gradientAccent;
 
@@ -268,7 +286,7 @@ const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, show
       style={styles.card}
       onPress={() => onPress(item.id)}
       accessibilityRole="button"
-      accessibilityLabel={`${item.title}, ${formatPrice(item.currentPrice)} on ${item.platform}${showMatch ? `, ${item.matchScore}% match` : ''}`}
+      accessibilityLabel={`${item.title}, ${formatMoney(item.currentPrice, item.currency)} on ${item.platform}${showMatch ? `, ${item.matchScore}% match` : ''}`}
       // Screen readers treat the card as one element, so expose the heart as an action.
       accessibilityActions={[
         { name: 'activate' },
@@ -318,7 +336,7 @@ const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, show
           {item.title}
         </Text>
         <Text style={styles.brandText} numberOfLines={1}>
-          {item.brand} · {item.condition} · {item.size}
+          {[item.brand, item.secondhand ? item.condition : 'New', item.size].filter(Boolean).join(' · ')}
         </Text>
 
         <View style={styles.tagRow}>
@@ -329,8 +347,10 @@ const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, show
 
         <View style={styles.priceRow}>
           <View style={styles.priceInfo}>
-            <Text style={styles.currentPrice}>{formatPrice(item.currentPrice)}</Text>
-            {item.originalPrice > item.currentPrice && <Text style={styles.originalPrice}>{formatPrice(item.originalPrice)}</Text>}
+            <Text style={styles.currentPrice}>{formatMoney(item.currentPrice, item.currency)}</Text>
+            {item.originalPrice !== null && (
+              <Text style={styles.originalPrice}>{formatMoney(item.originalPrice, item.currency)}</Text>
+            )}
           </View>
           <View style={styles.metricsRow}>
             <Text style={styles.metric} accessibilityLabel={`Eco score ${item.sustainabilityScore}`}>
@@ -339,15 +359,19 @@ const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, show
             <Text style={styles.metric} accessibilityLabel={`Deal score ${dealScore}`}>
               🔥 {dealScore}
             </Text>
-            <Text style={styles.metric} accessibilityLabel={`${item.co2Saved} kilograms of CO2 saved`}>
-              💨 {item.co2Saved}kg
-            </Text>
+            {item.secondhand && (
+              <Text style={styles.metric} accessibilityLabel={`About ${item.co2Saved} kilograms of CO2 saved`}>
+                💨 ~{item.co2Saved}kg
+              </Text>
+            )}
           </View>
         </View>
 
-        {dropsSoon && (
+        {dropsSoon && item.predictedPrice7d !== null && (
           <View style={styles.predictionHint}>
-            <Text style={styles.predictionText}>📉 Predicted to drop to {formatPrice(item.predictedPrice7d)} within 7 days</Text>
+            <Text style={styles.predictionText}>
+              📉 Recorded prices trend down — about {formatMoney(item.predictedPrice7d, item.currency)} expected within 7 days
+            </Text>
           </View>
         )}
       </View>

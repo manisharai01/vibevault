@@ -15,16 +15,20 @@ import { useShallow } from 'zustand/react/shallow';
 import { BorderRadius, Colors, FontSize, Spacing } from '../constants/theme';
 import { STYLE_ARCHETYPES } from '../constants/marketplaces';
 import { useStore } from '../store/useStore';
+import { useAvailableItems } from '../store/hooks';
 import { FashionItem, StyleArchetype } from '../types';
 import { ComposeStackParamList, RootTabParamList } from '../navigation/types';
 import ChipRow from '../components/common/ChipRow';
+import CatalogStatusBanner from '../components/common/CatalogStatusBanner';
 import EmptyState from '../components/common/EmptyState';
+import { refreshAndNotify } from '../services/lifecycle';
 import GradientCard from '../components/common/GradientCard';
 import ProductImage from '../components/common/ProductImage';
 import ScreenHeader from '../components/common/ScreenHeader';
 import { composeLook, LookSlot, SLOT_LABELS } from '../services/composer';
 import { hashString } from '../utils/random';
-import { formatPrice } from '../utils/format';
+import { formatInrTotal, totalInInr } from '../services/catalog';
+import { formatMoney } from '../utils/format';
 import { notify } from '../utils/dialog';
 import { shareText } from '../utils/share';
 
@@ -37,15 +41,18 @@ const STYLE_OPTIONS: ('All' | StyleArchetype)[] = ['All', ...STYLE_ARCHETYPES];
 
 export default function ComposerScreen() {
   const navigation = useNavigation<Nav>();
-  const { recommendedItems, wishlist, topStyle } = useStore(
+  const recommendedItems = useAvailableItems();
+  const { wishlist, topStyle } = useStore(
     useShallow((s) => ({
-      recommendedItems: s.recommendedItems,
       wishlist: s.profile.wishlist,
       topStyle: s.profile.styleArchetypes[0],
     })),
   );
   const [styleFilter, setStyleFilter] = useState<'All' | StyleArchetype>('All');
   const [shuffle, setShuffle] = useState(0);
+  const retry = () => {
+    refreshAndNotify({ force: true }).catch(() => undefined);
+  };
 
   const wishlistSet = useMemo(() => new Set(wishlist), [wishlist]);
   const candidates = useMemo(
@@ -58,12 +65,18 @@ export default function ComposerScreen() {
   );
 
   const pieces = look.filter((slot): slot is LookSlot & { item: FashionItem } => slot.item !== null);
-  const total = pieces.reduce((sum, slot) => sum + slot.item.currentPrice, 0);
+  const total = formatInrTotal(
+    totalInInr(pieces.map((slot) => slot.item)),
+    pieces.length,
+  );
   const fromWishlist = pieces.filter((slot) => slot.fromWishlist).length;
 
   const handleShare = async () => {
-    const lines = pieces.map((slot) => `• ${SLOT_LABELS[slot.key]}: ${slot.item.title} — ${formatPrice(slot.item.currentPrice)} on ${slot.item.platform}`);
-    const message = `My VibeVault look${styleFilter !== 'All' ? ` (${styleFilter})` : ''}:\n${lines.join('\n')}\nTotal: ${formatPrice(total)}`;
+    const lines = pieces.map(
+      (slot) =>
+        `• ${SLOT_LABELS[slot.key]}: ${slot.item.title} — ${formatMoney(slot.item.currentPrice, slot.item.currency)} on ${slot.item.platform}\n  ${slot.item.productUrl}`,
+    );
+    const message = `My VibeVault look${styleFilter !== 'All' ? ` (${styleFilter})` : ''}:\n${lines.join('\n')}\nTotal: ${total}`;
     const result = await shareText('My VibeVault look', message);
     if (result === 'copied') notify('Copied!', 'Your look has been copied to the clipboard.');
     if (result === 'unavailable') notify('Sharing unavailable', 'Sharing is not supported on this device.');
@@ -78,7 +91,9 @@ export default function ComposerScreen() {
 
       <ChipRow options={STYLE_OPTIONS} selected={styleFilter} onSelect={setStyleFilter} accessibilityLabel="Style" compact />
 
-      {pieces.length === 0 ? (
+      {recommendedItems.length === 0 ? (
+        <CatalogStatusBanner itemCount={0} onRetry={retry} />
+      ) : pieces.length === 0 ? (
         <EmptyState
           icon="shirt-outline"
           title="No pieces for this style yet"
@@ -93,7 +108,7 @@ export default function ComposerScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.sectionTitle}>Current Look</Text>
                 <Text style={styles.summaryText}>
-                  {pieces.length} {pieces.length === 1 ? 'piece' : 'pieces'} · {formatPrice(total)} total
+                  {pieces.length} {pieces.length === 1 ? 'piece' : 'pieces'} · {total} total
                 </Text>
                 <Text style={styles.summaryMeta}>
                   {fromWishlist > 0 ? `${fromWishlist} from your wishlist` : 'Save items to see them here first'}
@@ -124,7 +139,7 @@ export default function ComposerScreen() {
                 style={styles.itemCard}
                 onPress={() => navigation.navigate('ItemDetail', { itemId: slot.item!.id })}
                 accessibilityRole="button"
-                accessibilityLabel={`${SLOT_LABELS[slot.key]}: ${slot.item.title}, ${formatPrice(slot.item.currentPrice)}`}
+                accessibilityLabel={`${SLOT_LABELS[slot.key]}: ${slot.item.title}, ${formatMoney(slot.item.currentPrice, slot.item.currency)}`}
               >
                 <ProductImage uri={slot.item.image} style={styles.itemImage} category={slot.item.category} colors={slot.item.colors} iconSize={20} />
                 <View style={{ flex: 1 }}>
@@ -136,9 +151,9 @@ export default function ComposerScreen() {
                     {slot.item.title}
                   </Text>
                   <Text style={styles.itemMeta}>
-                    {slot.item.platform} · {slot.item.condition}
+                    {slot.item.platform} · {slot.item.secondhand ? slot.item.condition : 'New'}
                   </Text>
-                  <Text style={styles.itemPrice}>{formatPrice(slot.item.currentPrice)}</Text>
+                  <Text style={styles.itemPrice}>{formatMoney(slot.item.currentPrice, slot.item.currency)}</Text>
                 </View>
                 <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
               </TouchableOpacity>

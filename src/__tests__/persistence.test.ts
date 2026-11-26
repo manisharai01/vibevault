@@ -38,7 +38,7 @@ describe('field sanitizers', () => {
         totalXP: -10,
         points: 'lots',
         earnedBadges: { 'badge-001': '2026-01-01', 'badge-999': '2026-01-01', 'badge-002': 'yesterday' },
-        wishlist: ['item-001', 'item-404', 'item-001', null],
+        wishlist: ['flipkart:SHTFX123', 'item-404', 'flipkart:SHTFX123', null, 'ebay:v1|1|0', 'amazon:B0X', 'ebay:has space'],
         completedQuests: ['quest-001', 'quest-x'],
         budgetTier: 'budget-huge',
         sustainabilityPriority: 900,
@@ -52,24 +52,28 @@ describe('field sanitizers', () => {
     expect(profile.totalXP).toBe(0);
     expect(profile.points).toBe(0);
     expect(profile.earnedBadges).toEqual({ 'badge-001': '2026-01-01' });
-    expect(profile.wishlist).toEqual(['item-001']);
+    // Old sample ids and unknown sources are dropped; live listing ids are kept once.
+    expect(profile.wishlist).toEqual(['flipkart:SHTFX123', 'ebay:v1|1|0']);
     expect(profile.completedQuests).toEqual(['quest-001']);
     expect(profile.budgetTier).toBeNull();
     expect(profile.sustainabilityPriority).toBe(100);
     expect(profile.joinedDate).toBe('2026-11-25');
   });
 
-  it('drops invalid alerts and duplicates', () => {
+  it('drops invalid alerts, old sample items and duplicates', () => {
     const alerts = sanitizePriceAlerts([
-      { id: 'a', itemId: 'item-001', targetPrice: 10, priceAtCreation: 20, createdAt: '2026-01-01T00:00:00Z', status: 'active' },
-      { id: 'a', itemId: 'item-002', targetPrice: 10 },
-      { id: 'b', itemId: 'item-404', targetPrice: 10 },
-      { id: 'c', itemId: 'item-002', targetPrice: 0 },
-      { id: 'd', itemId: 'item-003', targetPrice: 12, status: 'triggered', triggeredAt: 'garbage' },
+      { id: 'a', itemId: 'flipkart:A1', currency: 'INR', targetPrice: 10, priceAtCreation: 20, createdAt: '2026-01-01T00:00:00Z', status: 'active' },
+      { id: 'a', itemId: 'flipkart:A2', currency: 'INR', targetPrice: 10 },
+      { id: 'b', itemId: 'item-404', currency: 'USD', targetPrice: 10 }, // old sample listing
+      { id: 'c', itemId: 'flipkart:A2', currency: 'INR', targetPrice: 0 },
+      { id: 'e', itemId: 'ebay:v1|2|0', targetPrice: 10 }, // no currency (pre-v3)
+      { id: 'f', itemId: 'ebay:v1|2|0', currency: 'usd', targetPrice: 10 },
+      { id: 'd', itemId: 'ebay:v1|3|0', currency: 'USD', targetPrice: 12, status: 'triggered', triggeredAt: 'garbage' },
       'junk',
     ]);
     expect(alerts.map((a) => a.id)).toEqual(['a', 'd']);
-    expect(alerts[1]).toMatchObject({ status: 'triggered', triggeredAt: undefined, acknowledged: false });
+    expect(alerts[0]).toMatchObject({ currency: 'INR', priceAtCreation: 20, acknowledged: true });
+    expect(alerts[1]).toMatchObject({ currency: 'USD', status: 'triggered', triggeredAt: undefined, acknowledged: false });
   });
 
   it('clamps quest progress to the definition without auto-completing (rewards stay claimable)', () => {
@@ -95,15 +99,19 @@ describe('field sanitizers', () => {
     expect(progress['quest-003'].deadline).toBeUndefined();
   });
 
-  it('keeps one purchase per item and validates platforms', () => {
+  it('keeps one purchase per item and validates platforms and currencies', () => {
     const purchases = sanitizePurchases([
-      { itemId: 'item-001', pricePaid: 20, platform: 'Depop', originalPrice: 80, co2Saved: 5 },
-      { itemId: 'item-001', pricePaid: 25, platform: 'Depop' },
-      { itemId: 'item-002', pricePaid: 20, platform: 'eBay' },
-      { itemId: 'item-003', pricePaid: -1, platform: 'Vinted' },
+      { itemId: 'ebay:v1|1|0', pricePaid: 20, platform: 'eBay', currency: 'USD', originalPrice: 80, inrRate: 92.24, co2Saved: 5 },
+      { itemId: 'ebay:v1|1|0', pricePaid: 25, platform: 'eBay', currency: 'USD' },
+      { itemId: 'flipkart:A1', pricePaid: 649, platform: 'Flipkart', currency: 'INR', originalPrice: 0 },
+      { itemId: 'item-002', pricePaid: 20, platform: 'Depop', currency: 'USD' }, // old sample listing
+      { itemId: 'ebay:v1|3|0', pricePaid: -1, platform: 'eBay', currency: 'USD' },
+      { itemId: 'ebay:v1|4|0', pricePaid: 10, platform: 'Vinted', currency: 'USD' },
+      { itemId: 'ebay:v1|5|0', pricePaid: 10, platform: 'eBay' },
     ]);
-    expect(purchases).toHaveLength(1);
-    expect(purchases[0]).toMatchObject({ itemId: 'item-001', pricePaid: 20, co2Saved: 5 });
+    expect(purchases.map((p) => p.itemId)).toEqual(['ebay:v1|1|0', 'flipkart:A1']);
+    expect(purchases[0]).toMatchObject({ pricePaid: 20, currency: 'USD', originalPrice: 80, inrRate: 92.24, secondhand: true, co2Saved: 5 });
+    expect(purchases[1]).toMatchObject({ currency: 'INR', originalPrice: null, inrRate: 1, secondhand: false, co2Saved: 0 });
   });
 
   it('cleans streaks', () => {
@@ -116,6 +124,7 @@ describe('migratePersistedState', () => {
   it('leaves current-version data alone', () => {
     const state = createDefaultPersistedState(NOW);
     expect(migratePersistedState(state, 2)).toBe(state);
+    expect(migratePersistedState(state, 3)).toBe(state);
   });
 
   it('handles empty or odd legacy data without throwing', () => {

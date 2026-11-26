@@ -2,15 +2,19 @@
 // VibeVault – Global State Store (Zustand + AsyncStorage)
 //
 // Persisted: user data only (see store/persistence.ts).
-// Runtime:   today's catalogue and the personalised ranking,
-//            rebuilt on launch and whenever the date changes.
+// Runtime:   the live catalogue from the VibeVault backend (real
+//            marketplace listings and recorded prices) and the
+//            personalised ranking. The last download is cached
+//            separately for offline starts (store/catalogCache.ts).
 // ============================================================
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { createJSONStorage, persist, StateStorage } from 'zustand/middleware';
-import { BADGE_IDS, QUEST_DEFINITIONS, STREAK_BADGE_DAYS } from '../data/mockData';
-import { buildCatalog } from '../services/catalog';
+import { backendConfig } from '../config';
+import { BADGE_IDS, QUEST_DEFINITIONS, STREAK_BADGE_DAYS } from '../data/content';
+import { toFashionItem, toFashionItems } from '../services/catalog';
+import { fetchCatalogRows, fetchCatalogStatus, liveCheckListing, type LiveCheckResult } from '../services/catalogApi';
 import {
   BADGE_BY_ID,
   getLevelInfo,
@@ -20,8 +24,10 @@ import {
 } from '../services/gamification';
 import { checkAlerts } from '../services/priceEngine';
 import { buildStyleProfile, getRecommendations } from '../services/styleEngine';
-import { Badge, FashionItem, PriceAlert, ProfilerAnswers, Purchase, StreakState } from '../types';
+import { Badge, CatalogStatus, FashionItem, PriceAlert, ProfilerAnswers, Purchase, StreakState } from '../types';
 import { toDateKey } from '../utils/date';
+import { formatMoney } from '../utils/format';
+import { readCatalogCache, writeCatalogCache } from './catalogCache';
 import {
   MAX_NAME_LENGTH,
   PersistedState,
@@ -50,9 +56,14 @@ export type QuestStepResult =
   | { status: 'invalid' };
 
 interface RuntimeState {
-  /** Today's catalogue (prices simulated for `catalogDate`). */
+  /** Live listings from the backend (plus unavailable ones the user saved or tracks). */
   catalog: FashionItem[];
-  catalogDate: string;
+  catalogStatus: CatalogStatus;
+  catalogError: string | null;
+  /** When the app last downloaded the catalogue (ISO). */
+  catalogFetchedAt: string | null;
+  /** When the backend last refreshed prices from the marketplaces (ISO). */
+  catalogUpdatedAt: string | null;
   /** Catalogue ranked for the user, with match scores. */
   recommendedItems: FashionItem[];
   hasHydrated: boolean;
@@ -74,7 +85,9 @@ interface Actions {
   completeQuestStep: (questId: string, now?: Date) => QuestStepResult;
   expireQuests: (now?: Date) => string[];
   recordDailyVisit: (now?: Date) => { newBadges: Badge[]; streak: StreakState };
-  refreshCatalog: (now?: Date, force?: boolean) => void;
+  loadCachedCatalog: () => Promise<void>;
+  syncCatalog: (options?: { force?: boolean; now?: Date }) => Promise<boolean>;
+  checkItemLive: (itemId: string) => Promise<{ item: FashionItem | null; checked: LiveCheckResult['checked'] } | null>;
   resetAllData: (now?: Date) => void;
   finishHydration: (storageAvailable: boolean) => void;
 }
@@ -138,17 +151,30 @@ const guardedStorage: StateStorage = {
   removeItem: (name) => AsyncStorage.removeItem(name),
 };
 
-const initialNow = new Date();
-const initialCatalog = buildCatalog(initialNow);
-const initialPersisted = createDefaultPersistedState(initialNow);
+/** How long a downloaded catalogue counts as fresh before the app syncs again. */
+export const CATALOG_SYNC_INTERVAL_MS = 15 * 60_000;
+let syncInFlight: Promise<boolean> | null = null;
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : 'Something went wrong.');
+const latestSuccess = (rows: { last_success_at: string | null }[]) =>
+  rows
+    .map((r) => r.last_success_at)
+    .filter((v): v is string => !!v)
+    .sort()
+    .at(-1) ?? null;
+
+const initialPersisted = createDefaultPersistedState(new Date());
 
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
       ...initialPersisted,
-      catalog: initialCatalog,
-      catalogDate: toDateKey(initialNow),
-      recommendedItems: getRecommendations(initialCatalog, initialPersisted.profile),
+      catalog: [],
+      catalogStatus: backendConfig ? 'idle' : 'unconfigured',
+      catalogError: null,
+      catalogFetchedAt: null,
+      catalogUpdatedAt: null,
+      recommendedItems: [],
       hasHydrated: false,
       storageAvailable: true,
 
@@ -191,8 +217,9 @@ export const useStore = create<AppState>()(
 
       toggleWishlist: (itemId) => {
         const state = get();
-        if (!state.catalog.some((item) => item.id === itemId)) return false;
         const isSaved = state.profile.wishlist.includes(itemId);
+        // Saving needs a known listing; removing always works (even if it has since sold).
+        if (!isSaved && !state.catalog.some((item) => item.id === itemId)) return false;
         const wishlist = isSaved ? state.profile.wishlist.filter((id) => id !== itemId) : [itemId, ...state.profile.wishlist];
         set({ profile: { ...state.profile, wishlist } });
         return !isSaved;
@@ -203,17 +230,21 @@ export const useStore = create<AppState>()(
       addPriceAlert: (itemId, targetPrice, now = new Date()) => {
         const state = get();
         const item = state.catalog.find((i) => i.id === itemId);
-        if (!item) return { ok: false, error: 'This item is no longer available.' };
+        if (!item || !item.available) return { ok: false, error: 'This item is no longer available.' };
         if (!Number.isFinite(targetPrice) || targetPrice <= 0) {
-          return { ok: false, error: 'Enter a target price greater than $0.' };
+          return { ok: false, error: 'Enter a target price greater than zero.' };
         }
         const target = Math.round(targetPrice * 100) / 100;
         if (target >= item.currentPrice) {
-          return { ok: false, error: `Your target must be below the current price of $${item.currentPrice.toFixed(2)}.` };
+          return {
+            ok: false,
+            error: `Your target must be below the current price of ${formatMoney(item.currentPrice, item.currency)}.`,
+          };
         }
         const alert: PriceAlert = {
           id: makeId('alert'),
           itemId,
+          currency: item.currency,
           targetPrice: target,
           priceAtCreation: item.currentPrice,
           createdAt: now.toISOString(),
@@ -273,8 +304,11 @@ export const useStore = create<AppState>()(
           itemId,
           title: item.title,
           platform: item.platform,
+          currency: item.currency,
           pricePaid: item.currentPrice,
           originalPrice: item.originalPrice,
+          inrRate: item.inrRate,
+          secondhand: item.secondhand,
           co2Saved: item.co2Saved,
           purchasedAt: now.toISOString(),
         };
@@ -381,12 +415,79 @@ export const useStore = create<AppState>()(
 
       // ---- Catalogue ----
 
-      refreshCatalog: (now = new Date(), force = false) => {
+      loadCachedCatalog: async () => {
+        if (get().catalog.length > 0) return;
+        const cache = await readCatalogCache();
+        if (!cache || get().catalog.length > 0) return;
+        const catalog = toFashionItems(cache.rows);
+        set({
+          catalog,
+          recommendedItems: getRecommendations(catalog, get().profile),
+          catalogFetchedAt: cache.fetchedAt,
+          catalogUpdatedAt: cache.updatedAt,
+        });
+      },
+
+      syncCatalog: ({ force = false, now = new Date() } = {}) => {
+        const config = backendConfig;
+        if (!config) {
+          set({ catalogStatus: 'unconfigured' });
+          return Promise.resolve(false);
+        }
         const state = get();
-        const dateKey = toDateKey(now);
-        if (!force && state.catalogDate === dateKey) return;
-        const catalog = buildCatalog(now);
-        set({ catalog, catalogDate: dateKey, recommendedItems: getRecommendations(catalog, state.profile) });
+        const fetchedAt = state.catalogFetchedAt ? new Date(state.catalogFetchedAt).getTime() : 0;
+        if (!force && state.catalogStatus === 'ready' && now.getTime() - fetchedAt < CATALOG_SYNC_INTERVAL_MS) {
+          return Promise.resolve(true);
+        }
+        if (syncInFlight) return syncInFlight;
+
+        set({ catalogStatus: 'loading', catalogError: null });
+        syncInFlight = (async () => {
+          try {
+            const current = get();
+            const tracked = [
+              ...current.profile.wishlist,
+              ...current.priceAlerts.filter((a) => a.status === 'active').map((a) => a.itemId),
+            ];
+            const [rows, status] = await Promise.all([
+              fetchCatalogRows(config, tracked),
+              fetchCatalogStatus(config).catch(() => []),
+            ]);
+            const catalog = toFashionItems(rows);
+            const fetchedIso = now.toISOString();
+            const updatedAt = latestSuccess(status);
+            set({
+              catalog,
+              recommendedItems: getRecommendations(catalog, get().profile),
+              catalogStatus: 'ready',
+              catalogError: null,
+              catalogFetchedAt: fetchedIso,
+              catalogUpdatedAt: updatedAt,
+            });
+            await writeCatalogCache({ fetchedAt: fetchedIso, updatedAt, rows });
+            return true;
+          } catch (error) {
+            set({ catalogStatus: 'error', catalogError: errorMessage(error) });
+            return false;
+          } finally {
+            syncInFlight = null;
+          }
+        })();
+        return syncInFlight;
+      },
+
+      checkItemLive: async (itemId) => {
+        const config = backendConfig;
+        if (!config) return null;
+        const result = await liveCheckListing(config, itemId);
+        const item = result.row ? toFashionItem(result.row) : null;
+        if (item) {
+          const state = get();
+          const exists = state.catalog.some((i) => i.id === item.id);
+          const catalog = exists ? state.catalog.map((i) => (i.id === item.id ? item : i)) : [...state.catalog, item];
+          set({ catalog, recommendedItems: getRecommendations(catalog, state.profile) });
+        }
+        return { item, checked: result.checked };
       },
 
       // ---- Data management ----

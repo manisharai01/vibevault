@@ -1,0 +1,11 @@
+# Supabase CLI project configuration (https://supabase.com/docs/guides/local-development/cli/config)
+project_id = "vibevault"
+
+# Both functions handle their own access control:
+#  - refresh-catalog requires the x-cron-secret header
+#  - live-item is public but only re-checks listings already in the catalogue, at most every 15 minutes
+[functions.refresh-catalog]
+verify_jwt = false
+
+[functions.live-item]
+verify_jwt = false

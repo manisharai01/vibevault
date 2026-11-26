@@ -34,7 +34,7 @@ import ProductImage from '../components/common/ProductImage';
 import Tag from '../components/common/Tag';
 import { BUDGET_LABELS } from '../services/styleEngine';
 import { notify } from '../utils/dialog';
-import { formatPrice } from '../utils/format';
+import { formatMoney } from '../utils/format';
 
 const USE_NATIVE_DRIVER = RNPlatform.OS !== 'web';
 const SLIDER_STOPS = [0, 25, 50, 75, 100];
@@ -194,7 +194,7 @@ export default function ProfilerScreen() {
 
   // ---- Results ----
   if (mode === 'results' && isProfileComplete) {
-    const topMatches = recommendedItems.slice(0, 3);
+    const topMatches = recommendedItems.filter((item) => item.available).slice(0, 3);
     return (
       <ScrollView style={styles.container} contentContainerStyle={styles.resultsContent}>
         <LinearGradient
@@ -278,6 +278,9 @@ export default function ProfilerScreen() {
 
           <GradientCard style={styles.section}>
             <Text style={styles.sectionTitle}>👗 Top Matches for You</Text>
+            {topMatches.length === 0 && (
+              <Text style={styles.matchMeta}>Your matches appear here once live listings have loaded.</Text>
+            )}
             {topMatches.map((item) => (
               <TouchableOpacity
                 key={item.id}
@@ -292,7 +295,7 @@ export default function ProfilerScreen() {
                     {item.title}
                   </Text>
                   <Text style={styles.matchMeta} numberOfLines={1}>
-                    {item.brand} · {formatPrice(item.currentPrice)} · {item.platform}
+                    {[item.brand, formatMoney(item.currentPrice, item.currency), item.platform].filter(Boolean).join(' · ')}
                   </Text>
                 </View>
                 <View

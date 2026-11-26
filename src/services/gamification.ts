@@ -1,19 +1,18 @@
 // ============================================================
 // VibeVault – Gamification (Objective 3)
-// Levels, quests, streaks, leaderboard and eco-impact metrics.
+// Levels, quests, streaks and eco-impact metrics.
 // All functions are pure so they are easy to test.
 // ============================================================
 
-import { BADGES, COMMUNITY_LEADERBOARD } from '../data/mockData';
+import { BADGES } from '../data/content';
+import { CO2_KG_PER_TREE_YEAR, WATER_LITERS_PER_KG_CO2 } from './sustainability';
 import {
   Badge,
-  LeaderboardEntry,
   Purchase,
   Quest,
   QuestDefinition,
   QuestProgress,
   StreakState,
-  StyleArchetype,
   SustainabilityMetrics,
 } from '../types';
 import { DAY_MS, daysBetween, parseDateKey } from '../utils/date';
@@ -137,41 +136,21 @@ export function updateStreak(streak: StreakState, todayKey: string): StreakState
   return { lastActiveDate: todayKey, current, longest: Math.max(streak.longest, current) };
 }
 
-// ---- Leaderboard ----
-
-export interface LeaderboardUser {
-  name: string;
-  points: number;
-  level: number;
-  styleArchetype: StyleArchetype | null;
-}
-
-export const CURRENT_USER_ID = 'me';
-
-/** Community members plus the current user, ranked by points. */
-export function buildLeaderboard(user: LeaderboardUser): LeaderboardEntry[] {
-  const entries = [
-    ...COMMUNITY_LEADERBOARD.map((e) => ({ ...e, isCurrentUser: false })),
-    { userId: CURRENT_USER_ID, name: user.name, points: user.points, level: user.level, styleArchetype: user.styleArchetype, isCurrentUser: true },
-  ];
-  // Ties: the established community member keeps the higher rank.
-  entries.sort((a, b) => b.points - a.points || Number(a.isCurrentUser) - Number(b.isCurrentUser));
-  return entries.map((entry, index) => ({ ...entry, rank: index + 1 }));
-}
-
 // ---- Sustainability ----
 
-export const WATER_LITERS_PER_KG_CO2 = 180;
-export const CO2_KG_PER_TREE_YEAR = 21;
-
 export function computeSustainability(purchases: Purchase[]): SustainabilityMetrics {
-  const co2 = purchases.reduce((sum, p) => sum + Math.max(0, p.co2Saved), 0);
-  const saved = purchases.reduce((sum, p) => sum + Math.max(0, p.originalPrice - p.pricePaid), 0);
+  const thrifted = purchases.filter((p) => p.secondhand);
+  const co2 = thrifted.reduce((sum, p) => sum + Math.max(0, p.co2Saved), 0);
+  // Savings vs retail, converted to rupees with the rate recorded at purchase time.
+  const savedInr = purchases.reduce((sum, p) => {
+    if (p.originalPrice === null || p.inrRate === null) return sum;
+    return sum + Math.max(0, p.originalPrice - p.pricePaid) * p.inrRate;
+  }, 0);
   return {
     totalCO2Saved: Math.round(co2 * 10) / 10,
-    itemsThrifted: purchases.length,
+    itemsThrifted: thrifted.length,
     waterSavedLiters: Math.round(co2 * WATER_LITERS_PER_KG_CO2),
-    moneySaved: Math.round(saved * 100) / 100,
+    moneySavedInr: Math.round(savedInr),
     treesEquivalent: Math.round((co2 / CO2_KG_PER_TREE_YEAR) * 100) / 100,
   };
 }

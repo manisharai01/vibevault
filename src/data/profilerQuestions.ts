@@ -113,10 +113,10 @@ export const PROFILER_QUESTIONS: ProfileQuestion[] = [
     question: 'Your typical clothing budget per item?',
     type: 'single',
     options: [
-      { label: '💰 Under $10', value: 'budget-low' },
-      { label: '💵 $10 – $30', value: 'budget-mid' },
-      { label: '💳 $30 – $60', value: 'budget-high' },
-      { label: '💎 $60+', value: 'budget-premium' },
+      { label: '💰 Under ₹500', value: 'budget-low' },
+      { label: '💵 ₹500 – ₹1,500', value: 'budget-mid' },
+      { label: '💳 ₹1,500 – ₹3,000', value: 'budget-high' },
+      { label: '💎 ₹3,000+', value: 'budget-premium' },
     ],
   },
 ];

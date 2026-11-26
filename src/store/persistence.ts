@@ -7,7 +7,7 @@
 // so corrupted or outdated data can never crash the app.
 // ============================================================
 
-import { SEED_ITEMS, QUEST_DEFINITIONS, BADGES } from '../data/mockData';
+import { QUEST_DEFINITIONS, BADGES } from '../data/content';
 import { LEVEL_THRESHOLDS } from '../services/gamification';
 import { computeStyleScores, computeVibeScore, generateVibeSummary } from '../services/styleEngine';
 import {
@@ -29,7 +29,7 @@ import { DAY_MS, toDateKey } from '../utils/date';
 import { STYLE_ARCHETYPES, PLATFORMS } from '../constants/marketplaces';
 
 export const STORE_NAME = 'vibevault-store-v1';
-export const STORE_VERSION = 2;
+export const STORE_VERSION = 3;
 export const MAX_NAME_LENGTH = 24;
 export const DEFAULT_NAME = 'VibeVault User';
 
@@ -96,7 +96,9 @@ const MUSIC: MusicGenre[] = ['pop', 'rock', 'hip-hop', 'jazz', 'electronic', 'cl
 const MEDIA: MediaPreference[] = ['action', 'romance', 'sci-fi', 'documentary', 'anime', 'comedy', 'thriller', 'drama'];
 const BUDGETS: BudgetTier[] = ['budget-low', 'budget-mid', 'budget-high', 'budget-premium'];
 
-const KNOWN_ITEM_IDS = new Set(SEED_ITEMS.map((i) => i.id));
+/** Ids of live marketplace listings (`flipkart:…` / `ebay:…`); anything else (e.g. old mock items) is dropped. */
+export const isListingId = (id: string) => /^(flipkart|ebay):[^\s]{1,200}$/.test(id);
+const isCurrency = (v: unknown): v is string => typeof v === 'string' && /^[A-Z]{3}$/.test(v);
 const QUEST_STEPS = new Map(QUEST_DEFINITIONS.map((q) => [q.id, q.steps.length]));
 const QUEST_DURATIONS = new Map(QUEST_DEFINITIONS.map((q) => [q.id, q.durationDays]));
 const KNOWN_BADGE_IDS = new Set(BADGES.map((b) => b.id));
@@ -152,7 +154,7 @@ export function sanitizeProfile(v: unknown, now: Date = new Date()): UserProfile
     points: Math.max(0, Math.floor(asNumber(v.points, 0))),
     earnedBadges,
     completedQuests: unique(asStringArray(v.completedQuests).filter((id) => QUEST_STEPS.has(id))),
-    wishlist: unique(asStringArray(v.wishlist).filter((id) => KNOWN_ITEM_IDS.has(id))),
+    wishlist: unique(asStringArray(v.wishlist).filter(isListingId)),
     joinedDate: isDateKey(v.joinedDate) ? v.joinedDate : fallback.joinedDate,
   };
 }
@@ -166,12 +168,13 @@ export function sanitizePriceAlerts(v: unknown): PriceAlert[] {
     const id = asString(raw.id, '');
     const itemId = asString(raw.itemId, '');
     const targetPrice = asNumber(raw.targetPrice, NaN);
-    if (!id || seenIds.has(id) || !KNOWN_ITEM_IDS.has(itemId) || !(targetPrice > 0)) continue;
+    if (!id || seenIds.has(id) || !isListingId(itemId) || !(targetPrice > 0) || !isCurrency(raw.currency)) continue;
     seenIds.add(id);
     const status = raw.status === 'triggered' ? 'triggered' : 'active';
     alerts.push({
       id,
       itemId,
+      currency: raw.currency,
       targetPrice,
       priceAtCreation: asNumber(raw.priceAtCreation, asNumber(raw.currentPrice, targetPrice)),
       createdAt: isIsoDate(raw.createdAt) ? raw.createdAt : new Date(0).toISOString(),
@@ -223,15 +226,25 @@ export function sanitizePurchases(v: unknown): Purchase[] {
     if (!isRecord(raw)) continue;
     const itemId = asString(raw.itemId, '');
     const pricePaid = asNumber(raw.pricePaid, NaN);
-    if (!itemId || seenItems.has(itemId) || !(pricePaid >= 0) || !oneOf(PLATFORMS as Platform[], raw.platform)) continue;
+    if (
+      !itemId || seenItems.has(itemId) || !isListingId(itemId) || !(pricePaid >= 0) ||
+      !oneOf(PLATFORMS as Platform[], raw.platform) || !isCurrency(raw.currency)
+    ) {
+      continue;
+    }
     seenItems.add(itemId);
+    const originalPrice = asNumber(raw.originalPrice, NaN);
+    const inrRate = asNumber(raw.inrRate, NaN);
     purchases.push({
       id: asString(raw.id, `purchase-${itemId}`),
       itemId,
-      title: asString(raw.title, 'Thrifted item'),
+      title: asString(raw.title, 'Purchase'),
       platform: raw.platform,
+      currency: raw.currency,
       pricePaid,
-      originalPrice: Math.max(0, asNumber(raw.originalPrice, pricePaid)),
+      originalPrice: originalPrice > 0 ? originalPrice : null,
+      inrRate: inrRate > 0 ? inrRate : raw.currency === 'INR' ? 1 : null,
+      secondhand: asBoolean(raw.secondhand, raw.platform !== 'Flipkart'),
       co2Saved: Math.max(0, asNumber(raw.co2Saved, 0)),
       purchasedAt: isIsoDate(raw.purchasedAt) ? raw.purchasedAt : new Date().toISOString(),
     });
@@ -271,6 +284,9 @@ export function sanitizePersistedState(v: unknown, now: Date = new Date()): Part
  * Upgrades older persisted snapshots to the current shape.
  * v0 (pre-release) persisted the whole catalogue, quest
  * definitions and level/xp counters instead of lifetime XP.
+ * v2 → v3 (live catalogue): wishlist items, alerts and purchases
+ * that point at the old sample listings are dropped by the
+ * sanitizer, since those items never existed on a marketplace.
  */
 export function migratePersistedState(persisted: unknown, fromVersion: number): unknown {
   if (!isRecord(persisted)) return persisted;

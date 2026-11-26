@@ -5,19 +5,19 @@
 // ============================================================
 
 import { useMemo } from 'react';
-import { QUEST_DEFINITIONS } from '../data/mockData';
-import {
-  buildLeaderboard,
-  computeSustainability,
-  getLevelInfo,
-  LevelInfo,
-  mergeQuest,
-} from '../services/gamification';
-import { FashionItem, LeaderboardEntry, PriceAlert, Quest, SustainabilityMetrics } from '../types';
+import { QUEST_DEFINITIONS } from '../data/content';
+import { computeSustainability, getLevelInfo, LevelInfo, mergeQuest } from '../services/gamification';
+import { FashionItem, PriceAlert, Quest, SustainabilityMetrics } from '../types';
 import { useStore } from './useStore';
 
 export function useItem(itemId: string | undefined): FashionItem | undefined {
   return useStore((s) => (itemId ? s.recommendedItems.find((item) => item.id === itemId) : undefined));
+}
+
+/** Ranked listings that can still be bought (excludes sold items kept for the wishlist/alerts). */
+export function useAvailableItems(): FashionItem[] {
+  const items = useStore((s) => s.recommendedItems);
+  return useMemo(() => items.filter((item) => item.available), [items]);
 }
 
 export function useWishlistItems(): FashionItem[] {
@@ -50,17 +50,6 @@ export function useLevelInfo(): LevelInfo {
 export function useSustainability(): SustainabilityMetrics {
   const purchases = useStore((s) => s.purchases);
   return useMemo(() => computeSustainability(purchases), [purchases]);
-}
-
-export function useLeaderboard(): LeaderboardEntry[] {
-  const name = useStore((s) => s.profile.name);
-  const points = useStore((s) => s.profile.points);
-  const totalXP = useStore((s) => s.profile.totalXP);
-  const topStyle = useStore((s) => s.profile.styleArchetypes[0] ?? null);
-  return useMemo(
-    () => buildLeaderboard({ name, points, level: getLevelInfo(totalXP).level, styleArchetype: topStyle }),
-    [name, points, totalXP, topStyle],
-  );
 }
 
 export function useUnseenTriggeredAlertCount(): number {

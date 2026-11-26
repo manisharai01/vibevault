@@ -1,6 +1,7 @@
 // ============================================================
 // VibeVault – Deterministic pseudo-random helpers
-// Used so simulated market data is stable across launches.
+// Seeded shuffles (e.g. the Wardrobe Composer) so a given seed
+// always produces the same look.
 // ============================================================
 
 /** 32-bit FNV-1a hash of a string. */
@@ -23,9 +24,4 @@ export function mulberry32(seed: number): () => number {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
-}
-
-/** Deterministic noise in [0, 1) for a (seed, n) pair. */
-export function noise01(seed: number, n: number): number {
-  return mulberry32((Math.imul(seed ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(n, 0xc2b2ae35)) >>> 0)();
 }

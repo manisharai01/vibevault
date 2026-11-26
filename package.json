@@ -7,10 +7,11 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p supabase/functions",
     "lint": "expo lint",
     "test": "jest",
-    "check": "npm run typecheck && npm run lint && npm test"
+    "check": "npm run typecheck && npm run lint && npm test",
+    "providers:check": "node --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --disable-warning=ExperimentalWarning scripts/check-providers.ts"
   },
   "dependencies": {
     "@expo/metro-runtime": "~55.0.12",
@@ -51,7 +52,8 @@
     ],
     "testPathIgnorePatterns": [
       "/node_modules/",
-      "/dist/"
+      "/dist/",
+      "/src/__tests__/helpers/"
     ]
   }
 }

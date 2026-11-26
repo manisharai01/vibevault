@@ -2,32 +2,21 @@
 // VibeVault – Marketplace / region constants
 // ============================================================
 
-import { ItemCategory, Platform, Region, StyleArchetype } from '../types';
+import { ItemCategory, ListingSource, Platform, Region, StyleArchetype } from '../types';
 
-export const PLATFORMS: Platform[] = [
-  'Myntra',
-  'Meesho',
-  'Amazon',
-  'Flipkart',
-  'Depop',
-  'Poshmark',
-  'Vinted',
-  'ThredUp',
-  'Local Thrift',
-];
+/** Marketplaces with live prices. */
+export const PLATFORMS: Platform[] = ['Flipkart', 'eBay'];
 
-export const REGIONS: Region[] = ['India', 'US', 'EU', 'Global'];
+export const PLATFORM_BY_SOURCE: Record<ListingSource, Platform> = {
+  flipkart: 'Flipkart',
+  ebay: 'eBay',
+};
 
-export const REGION_BY_PLATFORM: Record<Platform, Region> = {
-  Myntra: 'India',
-  Meesho: 'India',
-  Amazon: 'India',
-  Flipkart: 'India',
-  Depop: 'Global',
-  Poshmark: 'US',
-  Vinted: 'EU',
-  ThredUp: 'US',
-  'Local Thrift': 'Global',
+export const REGIONS: Region[] = ['India', 'Global'];
+
+export const REGION_LABELS: Record<Region, string> = {
+  India: 'India',
+  Global: 'Ships to India',
 };
 
 export const CATEGORIES: ItemCategory[] = ['Tops', 'Bottoms', 'Dresses', 'Outerwear', 'Shoes', 'Accessories', 'Bags'];
@@ -44,3 +33,8 @@ export const STYLE_ARCHETYPES: StyleArchetype[] = [
   'Dark Academia',
   'Y2K',
 ];
+
+/** Stores without a public price API: offered as "search there" links only. */
+export type ExternalStore = 'Myntra' | 'Meesho' | 'Amazon' | 'Ajio' | 'Depop' | 'Vinted' | 'Poshmark' | 'ThredUp';
+
+export const EXTERNAL_STORES: ExternalStore[] = ['Myntra', 'Meesho', 'Amazon', 'Ajio', 'Depop', 'Vinted', 'Poshmark', 'ThredUp'];

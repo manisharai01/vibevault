@@ -1,6 +1,7 @@
 // ============================================================
 // VibeVault – Wishlist Screen
-// Saved items with live prices, predicted drops and alerts.
+// Saved listings with live prices, forecast drops and alerts.
+// Listings that sell out stay visible (marked) until removed.
 // ============================================================
 
 import React, { useCallback, useMemo } from 'react';
@@ -18,7 +19,7 @@ import EmptyState from '../components/common/EmptyState';
 import ProductImage from '../components/common/ProductImage';
 import ScreenHeader from '../components/common/ScreenHeader';
 import Tag from '../components/common/Tag';
-import { formatPrice, formatPriceRounded, percentOff } from '../utils/format';
+import { formatInr, formatMoney, percentOff, toInr } from '../utils/format';
 
 type Nav = CompositeNavigationProp<
   NativeStackNavigationProp<ProfileStackParamList, 'Wishlist'>,
@@ -28,26 +29,41 @@ type Nav = CompositeNavigationProp<
 export default function WishlistScreen() {
   const navigation = useNavigation<Nav>();
   const wishlistItems = useWishlistItems();
-  const { isProfileComplete, priceAlerts, toggleWishlist } = useStore(
-    useShallow((s) => ({ isProfileComplete: s.isProfileComplete, priceAlerts: s.priceAlerts, toggleWishlist: s.toggleWishlist })),
+  const { isProfileComplete, priceAlerts, toggleWishlist, wishlistIds } = useStore(
+    useShallow((s) => ({
+      isProfileComplete: s.isProfileComplete,
+      priceAlerts: s.priceAlerts,
+      toggleWishlist: s.toggleWishlist,
+      wishlistIds: s.profile.wishlist,
+    })),
   );
+  // Saved ids whose listing isn't loaded (e.g. offline before the first sync).
+  const missingIds = useMemo(() => {
+    const loaded = new Set(wishlistItems.map((item) => item.id));
+    return wishlistIds.filter((id) => !loaded.has(id));
+  }, [wishlistIds, wishlistItems]);
 
   const alertItemIds = useMemo(() => new Set(priceAlerts.filter((a) => a.status === 'active').map((a) => a.itemId)), [priceAlerts]);
-  const totalSavings = wishlistItems.reduce((sum, item) => sum + Math.max(0, item.originalPrice - item.currentPrice), 0);
+  // Discount vs MRP/retail across available items, in rupees.
+  const totalSavingsInr = wishlistItems.reduce((sum, item) => {
+    if (!item.available || item.originalPrice === null) return sum;
+    return sum + (toInr(Math.max(0, item.originalPrice - item.currentPrice), item.inrRate) ?? 0);
+  }, 0);
   const avgMatch =
     wishlistItems.length > 0 ? Math.round(wishlistItems.reduce((sum, item) => sum + item.matchScore, 0) / wishlistItems.length) : 0;
 
   const renderItem = useCallback(
     ({ item }: { item: FashionItem }) => {
       const savePct = percentOff(item.currentPrice, item.originalPrice);
-      const dropsSoon = item.predictedPrice7d < item.currentPrice * 0.99;
+      const dropsSoon = item.available && item.predictedPrice7d !== null && item.predictedPrice7d < item.currentPrice * 0.99;
+      const money = (value: number) => formatMoney(value, item.currency);
       return (
         <TouchableOpacity
-          style={styles.card}
+          style={[styles.card, !item.available && styles.cardUnavailable]}
           onPress={() => navigation.navigate('ItemDetail', { itemId: item.id })}
           activeOpacity={0.85}
           accessibilityRole="button"
-          accessibilityLabel={`${item.title}, ${formatPrice(item.currentPrice)}`}
+          accessibilityLabel={`${item.title}, ${money(item.currentPrice)}${item.available ? '' : ', no longer available'}`}
           // Screen readers treat the card as one element, so expose Remove as an action.
           accessibilityActions={[{ name: 'activate' }, { name: 'remove', label: 'Remove from wishlist' }]}
           onAccessibilityAction={(event) => {
@@ -61,7 +77,7 @@ export default function WishlistScreen() {
               {item.title}
             </Text>
             <Text style={styles.cardBrand}>
-              {item.brand} · {item.condition}
+              {[item.brand, item.secondhand ? item.condition : 'New'].filter(Boolean).join(' · ')}
             </Text>
             <View style={styles.tagRow}>
               {item.styleArchetypes.slice(0, 2).map((s) => (
@@ -69,15 +85,20 @@ export default function WishlistScreen() {
               ))}
             </View>
             <View style={styles.priceRow}>
-              <Text style={styles.price}>{formatPrice(item.currentPrice)}</Text>
-              <Text style={styles.originalPrice}>{formatPrice(item.originalPrice)}</Text>
-              {savePct > 0 && (
+              <Text style={[styles.price, !item.available && styles.priceUnavailable]}>{money(item.currentPrice)}</Text>
+              {item.available && savePct > 0 && item.originalPrice !== null && (
+                <Text style={styles.originalPrice}>{money(item.originalPrice)}</Text>
+              )}
+              {item.available && savePct > 0 && (
                 <View style={styles.saveBadge}>
                   <Text style={styles.saveText}>-{savePct}%</Text>
                 </View>
               )}
             </View>
-            {dropsSoon && <Text style={styles.dropHint}>📉 Predicted {formatPrice(item.predictedPrice7d)} in 7 days</Text>}
+            {!item.available && <Text style={styles.unavailableHint}>Sold out or removed on {item.platform}</Text>}
+            {dropsSoon && item.predictedPrice7d !== null && (
+              <Text style={styles.dropHint}>📉 Recorded prices point to ~{money(item.predictedPrice7d)} within 7 days</Text>
+            )}
             <View style={styles.cardBottom}>
               <View style={[styles.platformChip, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}>
                 <Text style={styles.platformText}>{item.platform}</Text>
@@ -114,8 +135,8 @@ export default function WishlistScreen() {
               <Text style={styles.statLabel}>Saved</Text>
             </View>
             <View style={styles.stat}>
-              <Text style={styles.statValue}>{formatPriceRounded(totalSavings)}</Text>
-              <Text style={styles.statLabel}>Off retail</Text>
+              <Text style={styles.statValue}>{formatInr(totalSavingsInr)}</Text>
+              <Text style={styles.statLabel}>Off MRP / retail</Text>
             </View>
             {isProfileComplete && (
               <View style={styles.stat}>
@@ -133,14 +154,33 @@ export default function WishlistScreen() {
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
+        ListFooterComponent={
+          missingIds.length > 0 ? (
+            <View style={styles.missingNote}>
+              <Text style={styles.missingText}>
+                {missingIds.length} saved {missingIds.length === 1 ? 'listing' : 'listings'} couldn’t be loaded right now. They’ll appear
+                once VibeVault reaches the server.
+              </Text>
+              <TouchableOpacity
+                onPress={() => missingIds.forEach((id) => toggleWishlist(id))}
+                accessibilityRole="button"
+                hitSlop={8}
+              >
+                <Text style={styles.removeBtnText}>Remove {missingIds.length === 1 ? 'it' : 'them'}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
-          <EmptyState
-            icon="heart-outline"
-            title="No saved items yet"
-            message="Tap the heart on any item in Discover to save it here and track its price."
-            actionLabel="✨ Browse Discover"
-            onAction={() => navigation.navigate('Discover', { screen: 'DiscoverFeed', pop: true })}
-          />
+          missingIds.length > 0 ? null : (
+            <EmptyState
+              icon="heart-outline"
+              title="No saved items yet"
+              message="Tap the heart on any item in Discover to save it here and track its price."
+              actionLabel="✨ Browse Discover"
+              onAction={() => navigation.navigate('Discover', { screen: 'DiscoverFeed', pop: true })}
+            />
+          )
         }
       />
     </View>
@@ -181,4 +221,9 @@ const styles = StyleSheet.create({
   alertChipText: { color: Colors.warning, fontSize: 9, fontWeight: '600' },
   removeBtn: { marginLeft: 'auto', paddingHorizontal: Spacing.sm, paddingVertical: 2 },
   removeBtnText: { color: Colors.error, fontSize: FontSize.xs, fontWeight: '700' },
+  cardUnavailable: { opacity: 0.7 },
+  priceUnavailable: { color: Colors.textMuted, textDecorationLine: 'line-through' },
+  unavailableHint: { color: Colors.warning, fontSize: FontSize.xs, fontWeight: '600', marginBottom: 4 },
+  missingNote: { gap: Spacing.sm, padding: Spacing.md, borderRadius: BorderRadius.md, borderWidth: 1, borderColor: Colors.border },
+  missingText: { color: Colors.textMuted, fontSize: FontSize.xs, lineHeight: 17 },
 });

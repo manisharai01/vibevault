@@ -1,21 +1,63 @@
 import { addDays, daysBetween, formatDate, formatShortDate, parseDateKey, toDateKey } from '../utils/date';
-import { clamp, formatNumber, formatPrice, formatPriceRounded, parsePriceInput, percentOff } from '../utils/format';
-import { hashString, mulberry32, noise01 } from '../utils/random';
+import {
+  clamp,
+  currencySymbol,
+  formatInr,
+  formatMoney,
+  formatNumber,
+  formatRelativeTime,
+  parsePriceInput,
+  percentOff,
+  toInr,
+} from '../utils/format';
+import { hashString, mulberry32 } from '../utils/random';
 
 describe('format', () => {
-  it('formats prices with two decimals and thousands separators', () => {
-    expect(formatPrice(0)).toBe('$0.00');
-    expect(formatPrice(12.5)).toBe('$12.50');
-    expect(formatPrice(1234.567)).toBe('$1,234.57');
-    expect(formatPrice(-3)).toBe('-$3.00');
-    expect(formatPrice(Number.NaN)).toBe('$0.00');
-    expect(formatPrice(Number.POSITIVE_INFINITY)).toBe('$0.00');
+  it('formats rupees with Indian digit grouping, dropping .00', () => {
+    expect(formatMoney(0, 'INR')).toBe('₹0');
+    expect(formatMoney(649, 'INR')).toBe('₹649');
+    expect(formatMoney(1299.5, 'INR')).toBe('₹1,299.50');
+    expect(formatMoney(129999, 'INR')).toBe('₹1,29,999');
+    expect(formatMoney(12345678.9, 'INR')).toBe('₹1,23,45,678.90');
+    expect(formatMoney(-3, 'INR')).toBe('-₹3');
+    expect(formatInr(1999.6)).toBe('₹2,000');
   });
 
-  it('formats rounded prices and numbers', () => {
-    expect(formatPriceRounded(1999.6)).toBe('$2,000');
+  it('formats other currencies with two decimals and thousands separators', () => {
+    expect(formatMoney(12.5, 'USD')).toBe('$12.50');
+    expect(formatMoney(1234.567, 'USD')).toBe('$1,234.57');
+    expect(formatMoney(5, 'GBP')).toBe('£5.00');
+    expect(formatMoney(5, 'SGD')).toBe('SGD 5.00');
+    expect(currencySymbol('EUR')).toBe('€');
+  });
+
+  it('never prints NaN or Infinity', () => {
+    expect(formatMoney(Number.NaN, 'INR')).toBe('₹0');
+    expect(formatMoney(Number.POSITIVE_INFINITY, 'USD')).toBe('$0.00');
+  });
+
+  it('converts to rupees only with a valid rate', () => {
+    expect(toInr(10, 92.24)).toBeCloseTo(922.4);
+    expect(toInr(10, null)).toBeNull();
+    expect(toInr(10, 0)).toBeNull();
+  });
+
+  it('formats numbers', () => {
     expect(formatNumber(1234567)).toBe('1,234,567');
     expect(formatNumber(12.4)).toBe('12');
+  });
+
+  it('describes how long ago something happened', () => {
+    const now = new Date(2026, 10, 25, 12, 0);
+    const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000).toISOString();
+    expect(formatRelativeTime(null, now)).toBe('never');
+    expect(formatRelativeTime('garbage', now)).toBe('unknown');
+    expect(formatRelativeTime(ago(0), now)).toBe('just now');
+    expect(formatRelativeTime(ago(5), now)).toBe('5 min ago');
+    expect(formatRelativeTime(ago(180), now)).toBe('3 h ago');
+    expect(formatRelativeTime(ago(60 * 24), now)).toBe('1 day ago');
+    expect(formatRelativeTime(ago(60 * 24 * 3), now)).toBe('3 days ago');
+    expect(formatRelativeTime(new Date(now.getTime() + 60_000).toISOString(), now)).toBe('just now'); // clock skew
   });
 
   it('computes percent off safely', () => {
@@ -31,6 +73,9 @@ describe('format', () => {
     ['12,50', 12.5],
     ['$ 19.99', 19.99],
     ['1,234.50', 1234.5],
+    ['₹1,299', 1299],
+    ['1,29,999', 129999],
+    ['₹ 649', 649],
     ['.5', 0.5],
     ['7.', 7],
     ['3.456', 3.46],
@@ -88,7 +133,6 @@ describe('random', () => {
     const a = mulberry32(42);
     const b = mulberry32(42);
     expect([a(), a(), a()]).toEqual([b(), b(), b()]);
-    expect(noise01(7, 100)).toBe(noise01(7, 100));
   });
 
   it('produces values in [0, 1)', () => {

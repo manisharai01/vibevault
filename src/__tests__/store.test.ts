@@ -1,13 +1,44 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BADGE_IDS, QUEST_DEFINITIONS, SEED_ITEMS } from '../data/mockData';
+import { BADGE_IDS, QUEST_DEFINITIONS } from '../data/content';
 import { QUESTION_IDS } from '../data/profilerQuestions';
-import { simulatedPrice } from '../services/priceEngine';
+import { CatalogRow } from '../services/catalog';
+import { readCatalogCache } from '../store/catalogCache';
 import { STORE_NAME, STORE_VERSION } from '../store/persistence';
-import { CORRUPT_BACKUP_SUFFIX, useStore } from '../store/useStore';
+import { CATALOG_SYNC_INTERVAL_MS, CORRUPT_BACKUP_SUFFIX, useStore } from '../store/useStore';
 import { ProfilerAnswers } from '../types';
 import { addDays } from '../utils/date';
+import { dailyHistory, makeRow, NOW, sampleCatalogRows } from './helpers/fixtures';
 
-const NOW = new Date(2026, 10, 25, 10, 0);
+jest.mock('../config', () => ({
+  backendConfig: { url: 'https://vibevault-test.supabase.co', anonKey: 'sb_publishable_test' },
+}));
+
+// ---- Fake VibeVault backend (Supabase REST + live-item function) ----
+
+let serverRows: CatalogRow[] = [];
+let serverDown = false;
+let serverStatus = 200;
+let liveRow: CatalogRow | null = null;
+const fetchMock = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = String(input);
+  if (serverDown) throw new TypeError('Network request failed');
+  const respond = (body: unknown, status = serverStatus) =>
+    ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response;
+  if (url.includes('/rest/v1/catalog_items')) return respond(serverRows);
+  if (url.includes('/rest/v1/catalog_status')) {
+    return respond([{ source: 'flipkart', last_success_at: '2026-11-25T00:31:00Z', last_status: 'ok', last_message: null, available_listings: 5 }]);
+  }
+  if (url.includes('/functions/v1/live-item')) {
+    const { id } = JSON.parse(String(init?.body));
+    const row = liveRow ?? serverRows.find((r) => r.id === id);
+    return row ? respond({ item: row, checked: 'live' }) : respond({ error: 'Listing not found.' }, 404);
+  }
+  return respond({ message: 'not found' }, 404);
+});
+global.fetch = fetchMock as unknown as typeof fetch;
+
+const catalogCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).includes('/rest/v1/catalog_items'));
+
 const answers: ProfilerAnswers = {
   [QUESTION_IDS.personality]: 'extrovert',
   [QUESTION_IDS.thinking]: 'avant-garde',
@@ -19,6 +50,10 @@ const answers: ProfilerAnswers = {
   [QUESTION_IDS.budget]: 'budget-high',
 };
 
+const SHIRT = 'flipkart:SHTFX123';
+const JEANS = 'flipkart:JEAFX1';
+const JACKET = 'ebay:v1|1234567890|0';
+
 const store = () => useStore.getState();
 const itemById = (id: string) => store().catalog.find((i) => i.id === id)!;
 
@@ -26,14 +61,24 @@ async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** Changes a listing on the fake server. */
+function updateServerRow(id: string, patch: Partial<CatalogRow>) {
+  serverRows = serverRows.map((row) => (row.id === id ? { ...row, ...patch } : row));
+}
+
 beforeAll(async () => {
   await flush(); // initial hydration from the (empty) mock storage
   expect(store().hasHydrated).toBe(true);
 });
 
-beforeEach(() => {
-  store().refreshCatalog(NOW, true);
+beforeEach(async () => {
+  serverRows = sampleCatalogRows();
+  serverDown = false;
+  serverStatus = 200;
+  liveRow = null;
+  await store().syncCatalog({ force: true, now: NOW });
   store().resetAllData(NOW);
+  fetchMock.mockClear();
 });
 
 describe('profile', () => {
@@ -60,57 +105,161 @@ describe('profile', () => {
   });
 });
 
+describe('live catalogue sync', () => {
+  it('loads real listings from the backend with their server refresh time', () => {
+    expect(store().catalogStatus).toBe('ready');
+    expect(store().catalog).toHaveLength(sampleCatalogRows().length);
+    expect(store().catalogFetchedAt).toBe(NOW.toISOString());
+    expect(store().catalogUpdatedAt).toBe('2026-11-25T00:31:00Z');
+    expect(itemById(JACKET)).toMatchObject({ platform: 'eBay', currency: 'USD', currentPrice: 42.5 });
+  });
+
+  it('sends the public key, and asks for tracked listings even if they sold out', async () => {
+    store().toggleWishlist(SHIRT);
+    store().addPriceAlert(JACKET, 40, NOW);
+    await store().syncCatalog({ force: true, now: NOW });
+    const [url, init] = catalogCalls()[0];
+    expect(decodeURIComponent(String(url))).toContain(`id.in.("${SHIRT}","${JACKET}")`);
+    expect(String(url)).toContain('available.is.true');
+    expect((init?.headers as Record<string, string>).apikey).toBe('sb_publishable_test');
+    // Publishable (non-JWT) keys never go in the Authorization header.
+    expect((init?.headers as Record<string, string>).Authorization).toBeUndefined();
+  });
+
+  it('does not refetch while fresh, unless forced', async () => {
+    await store().syncCatalog({ now: new Date(NOW.getTime() + 60_000) });
+    expect(catalogCalls()).toHaveLength(0);
+    await store().syncCatalog({ now: new Date(NOW.getTime() + CATALOG_SYNC_INTERVAL_MS + 1) });
+    expect(catalogCalls()).toHaveLength(1);
+    await store().syncCatalog({ force: true, now: NOW });
+    expect(catalogCalls()).toHaveLength(2);
+  });
+
+  it('shares one request between overlapping syncs', async () => {
+    const [a, b] = await Promise.all([store().syncCatalog({ force: true, now: NOW }), store().syncCatalog({ force: true, now: NOW })]);
+    expect(a && b).toBe(true);
+    expect(catalogCalls()).toHaveLength(1);
+  });
+
+  it('keeps the last known prices when the server is unreachable', async () => {
+    serverDown = true;
+    expect(await store().syncCatalog({ force: true, now: NOW })).toBe(false);
+    expect(store().catalogStatus).toBe('error');
+    expect(store().catalogError).toMatch(/couldn't reach/);
+    expect(store().catalog).toHaveLength(sampleCatalogRows().length);
+  });
+
+  it('reports HTTP errors', async () => {
+    serverStatus = 500;
+    expect(await store().syncCatalog({ force: true, now: NOW })).toBe(false);
+    expect(store().catalogError).toMatch(/HTTP 500/);
+  });
+
+  it('caches the download and restores it on an offline start', async () => {
+    const cache = await readCatalogCache();
+    expect(cache?.rows).toHaveLength(sampleCatalogRows().length);
+    expect(cache?.fetchedAt).toBe(NOW.toISOString());
+    useStore.setState({ catalog: [], recommendedItems: [], catalogFetchedAt: null });
+    await store().loadCachedCatalog();
+    expect(store().catalog).toHaveLength(sampleCatalogRows().length);
+    expect(store().catalogFetchedAt).toBe(NOW.toISOString());
+  });
+
+  it('skips rows that fail validation instead of failing the whole sync', async () => {
+    serverRows = [...sampleCatalogRows(), makeRow({ id: 'flipkart:BAD', current_price: 'n/a' }), { junk: true } as never];
+    expect(await store().syncCatalog({ force: true, now: NOW })).toBe(true);
+    expect(store().catalog).toHaveLength(sampleCatalogRows().length);
+  });
+
+  it('keeps sold-out listings the user tracks, marked unavailable', async () => {
+    store().toggleWishlist(SHIRT);
+    updateServerRow(SHIRT, { available: false });
+    await store().syncCatalog({ force: true, now: NOW });
+    expect(itemById(SHIRT).available).toBe(false);
+    expect(store().recommendedItems.find((i) => i.id === SHIRT)?.available).toBe(false);
+  });
+});
+
+describe('live price check', () => {
+  it('replaces the listing with the freshly checked one', async () => {
+    liveRow = makeRow({ current_price: 599, last_checked_at: new Date(NOW.getTime() + 60_000).toISOString() });
+    const result = await store().checkItemLive(SHIRT);
+    expect(result?.checked).toBe('live');
+    expect(result?.item?.currentPrice).toBe(599);
+    expect(itemById(SHIRT).currentPrice).toBe(599);
+    expect(store().recommendedItems.find((i) => i.id === SHIRT)?.currentPrice).toBe(599);
+  });
+
+  it('adds a listing that was not in the catalogue yet', async () => {
+    liveRow = makeRow({ id: 'flipkart:NEW1', source_item_id: 'NEW1', title: 'New Listing' });
+    await store().checkItemLive('flipkart:NEW1');
+    expect(itemById('flipkart:NEW1').title).toBe('New Listing');
+  });
+
+  it('rejects when the backend fails (the screen keeps the recorded price)', async () => {
+    await expect(store().checkItemLive('flipkart:UNKNOWN')).rejects.toThrow(/HTTP 404/);
+    serverDown = true;
+    await expect(store().checkItemLive(SHIRT)).rejects.toThrow();
+    expect(itemById(SHIRT).currentPrice).toBe(649);
+  });
+});
+
 describe('wishlist', () => {
-  it('toggles items, newest first, and ignores unknown ids', () => {
-    expect(store().toggleWishlist('item-001')).toBe(true);
-    expect(store().toggleWishlist('item-002')).toBe(true);
-    expect(store().profile.wishlist).toEqual(['item-002', 'item-001']);
-    expect(store().toggleWishlist('item-001')).toBe(false);
-    expect(store().profile.wishlist).toEqual(['item-002']);
-    expect(store().toggleWishlist('does-not-exist')).toBe(false);
-    expect(store().profile.wishlist).toEqual(['item-002']);
+  it('toggles listings, newest first, and ignores unknown ids', () => {
+    expect(store().toggleWishlist(SHIRT)).toBe(true);
+    expect(store().toggleWishlist(JEANS)).toBe(true);
+    expect(store().profile.wishlist).toEqual([JEANS, SHIRT]);
+    expect(store().toggleWishlist(SHIRT)).toBe(false);
+    expect(store().profile.wishlist).toEqual([JEANS]);
+    expect(store().toggleWishlist('flipkart:does-not-exist')).toBe(false);
+    expect(store().profile.wishlist).toEqual([JEANS]);
+  });
+
+  it('can always remove a saved listing, even one no longer in the catalogue', () => {
+    useStore.setState({ profile: { ...store().profile, wishlist: ['ebay:v1|gone|0'] } });
+    expect(store().toggleWishlist('ebay:v1|gone|0')).toBe(false);
+    expect(store().profile.wishlist).toEqual([]);
   });
 });
 
 describe('price alerts', () => {
-  it('rejects invalid targets', () => {
-    const item = itemById('item-001');
-    expect(store().addPriceAlert('item-001', 0).ok).toBe(false);
-    expect(store().addPriceAlert('item-001', -5).ok).toBe(false);
-    expect(store().addPriceAlert('item-001', Number.NaN).ok).toBe(false);
-    expect(store().addPriceAlert('item-001', item.currentPrice).ok).toBe(false);
-    expect(store().addPriceAlert('nope', 5).ok).toBe(false);
+  it('rejects invalid targets and unavailable listings', async () => {
+    const item = itemById(SHIRT);
+    expect(store().addPriceAlert(SHIRT, 0).ok).toBe(false);
+    expect(store().addPriceAlert(SHIRT, -5).ok).toBe(false);
+    expect(store().addPriceAlert(SHIRT, Number.NaN).ok).toBe(false);
+    const atPrice = store().addPriceAlert(SHIRT, item.currentPrice);
+    expect(atPrice.ok).toBe(false);
+    if (!atPrice.ok) expect(atPrice.error).toContain('₹649');
+    expect(store().addPriceAlert('flipkart:nope', 5).ok).toBe(false);
+
+    store().toggleWishlist(JEANS);
+    updateServerRow(JEANS, { available: false });
+    await store().syncCatalog({ force: true, now: NOW });
+    expect(store().addPriceAlert(JEANS, 100).ok).toBe(false);
     expect(store().priceAlerts).toHaveLength(0);
   });
 
-  it('keeps one active alert per item', () => {
-    const item = itemById('item-001');
-    const a = store().addPriceAlert('item-001', item.currentPrice - 1, NOW);
-    const b = store().addPriceAlert('item-001', item.currentPrice - 2, NOW);
+  it('keeps one active alert per item, in the listing’s currency', () => {
+    const a = store().addPriceAlert(JACKET, 40, NOW);
+    const b = store().addPriceAlert(JACKET, 39.999, NOW);
     expect(a.ok && b.ok).toBe(true);
     expect(store().priceAlerts).toHaveLength(1);
-    expect(store().priceAlerts[0].targetPrice).toBeCloseTo(item.currentPrice - 2, 2);
+    expect(store().priceAlerts[0]).toMatchObject({ targetPrice: 40, currency: 'USD', priceAtCreation: 42.5 });
   });
 
-  it('triggers when the simulated price drops to the target, awards Price Prophet and supports acknowledging', () => {
-    const seed = SEED_ITEMS[0];
-    const today = simulatedPrice(seed, NOW);
-    // Find the first upcoming day with a lower price.
-    let dropDay = 0;
-    for (let d = 1; d <= 60 && !dropDay; d++) if (simulatedPrice(seed, addDays(NOW, d)) < today) dropDay = d;
-    expect(dropDay).toBeGreaterThan(0);
-    const dropPrice = simulatedPrice(seed, addDays(NOW, dropDay));
-
-    const result = store().addPriceAlert(seed.id, dropPrice, NOW);
-    expect(result.ok).toBe(true);
+  it('triggers when the live price drops to the target, awards Price Prophet once and supports acknowledging', async () => {
+    expect(store().addPriceAlert(SHIRT, 600, NOW).ok).toBe(true);
     expect(store().checkPriceAlerts(NOW).triggered).toHaveLength(0);
 
-    const later = addDays(NOW, dropDay);
-    store().refreshCatalog(later);
+    // The marketplace price drops; the next sync picks it up.
+    const later = addDays(NOW, 1);
+    updateServerRow(SHIRT, { current_price: 599, price_history: dailyHistory([649, 599], later) });
+    await store().syncCatalog({ force: true, now: later });
     const { triggered, newBadges } = store().checkPriceAlerts(later);
     expect(triggered).toHaveLength(1);
-    expect(triggered[0].item.id).toBe(seed.id);
-    expect(triggered[0].alert).toMatchObject({ status: 'triggered', triggeredPrice: dropPrice, acknowledged: false });
+    expect(triggered[0].item.id).toBe(SHIRT);
+    expect(triggered[0].alert).toMatchObject({ status: 'triggered', triggeredPrice: 599, acknowledged: false });
     expect(newBadges.map((b) => b.id)).toEqual([BADGE_IDS.priceProphet]);
 
     // A triggered alert never fires twice.
@@ -120,9 +269,15 @@ describe('price alerts', () => {
     expect(store().priceAlerts[0].acknowledged).toBe(true);
   });
 
+  it('does not trigger for a listing that sold out', async () => {
+    store().addPriceAlert(SHIRT, 600, NOW);
+    updateServerRow(SHIRT, { current_price: 500, available: false });
+    await store().syncCatalog({ force: true, now: NOW });
+    expect(store().checkPriceAlerts(NOW).triggered).toHaveLength(0);
+  });
+
   it('removes alerts', () => {
-    const item = itemById('item-002');
-    const res = store().addPriceAlert(item.id, item.currentPrice - 1);
+    const res = store().addPriceAlert(JEANS, 1500);
     if (!res.ok) throw new Error(res.error);
     store().removePriceAlert(res.alert.id);
     expect(store().priceAlerts).toHaveLength(0);
@@ -130,17 +285,29 @@ describe('price alerts', () => {
 });
 
 describe('purchases', () => {
-  it('logs a purchase once, clears its active alert and can be undone', () => {
-    const item = itemById('item-005');
-    store().addPriceAlert(item.id, item.currentPrice - 1);
+  it('logs a purchase once with its currency, clears its active alert and can be undone', () => {
+    const item = itemById(JACKET);
+    store().addPriceAlert(item.id, 40);
     const purchase = store().logPurchase(item.id, NOW);
-    expect(purchase).toMatchObject({ itemId: item.id, pricePaid: item.currentPrice, co2Saved: item.co2Saved });
+    expect(purchase).toMatchObject({
+      itemId: item.id,
+      platform: 'eBay',
+      currency: 'USD',
+      pricePaid: 42.5,
+      inrRate: 92.24,
+      secondhand: true,
+      co2Saved: item.co2Saved,
+    });
     expect(store().priceAlerts).toHaveLength(0);
     expect(store().logPurchase(item.id, NOW)).toBeNull();
     expect(store().purchases).toHaveLength(1);
     store().undoPurchase(item.id);
     expect(store().purchases).toHaveLength(0);
-    expect(store().logPurchase('missing')).toBeNull();
+    expect(store().logPurchase('flipkart:missing')).toBeNull();
+  });
+
+  it('records new retail purchases without CO₂ savings', () => {
+    expect(store().logPurchase(SHIRT, NOW)).toMatchObject({ currency: 'INR', secondhand: false, co2Saved: 0, originalPrice: 1299 });
   });
 });
 
@@ -206,31 +373,21 @@ describe('daily streak', () => {
   });
 });
 
-describe('catalogue refresh', () => {
-  it('only rebuilds when the day changes (or when forced)', () => {
-    const before = store().catalog;
-    store().refreshCatalog(new Date(2026, 10, 25, 22, 0));
-    expect(store().catalog).toBe(before);
-    store().refreshCatalog(addDays(NOW, 1));
-    expect(store().catalog).not.toBe(before);
-    expect(store().catalogDate).toBe('2026-11-26');
-  });
-});
-
 describe('reset & persistence', () => {
-  it('reset wipes user data', () => {
+  it('reset wipes user data but keeps the live catalogue', () => {
     store().completeProfile(answers, NOW);
-    store().toggleWishlist('item-001');
+    store().toggleWishlist(SHIRT);
     store().startQuest('quest-001', NOW);
     store().resetAllData(NOW);
     expect(store().isProfileComplete).toBe(false);
     expect(store().profile.wishlist).toEqual([]);
     expect(store().questProgress).toEqual({});
     expect(store().profile.earnedBadges).toEqual({});
+    expect(store().catalog).toHaveLength(sampleCatalogRows().length);
   });
 
   it('persists only user data (never the catalogue)', async () => {
-    store().toggleWishlist('item-003');
+    store().toggleWishlist(JACKET);
     await flush();
     const raw = await AsyncStorage.getItem(STORE_NAME);
     const saved = JSON.parse(raw!);
@@ -238,10 +395,10 @@ describe('reset & persistence', () => {
     expect(Object.keys(saved.state).sort()).toEqual(
       ['isProfileComplete', 'priceAlerts', 'profile', 'purchases', 'questProgress', 'streak', 'vibeSummary'].sort(),
     );
-    expect(saved.state.profile.wishlist).toEqual(['item-003']);
+    expect(saved.state.profile.wishlist).toEqual([JACKET]);
   });
 
-  it('rehydrates and migrates a legacy (v0) snapshot', async () => {
+  it('rehydrates and migrates a legacy (v0) snapshot, dropping old sample listings', async () => {
     const legacy = {
       version: 0,
       state: {
@@ -283,16 +440,34 @@ describe('reset & persistence', () => {
     expect(s.profile.name).toBe('Legacy');
     expect(s.profile.totalXP).toBe(150);
     expect(s.profile.earnedBadges).toEqual({ 'badge-003': '2026-03-01' });
-    expect(s.profile.wishlist).toEqual(['item-001']);
+    expect(s.profile.wishlist).toEqual([]); // sample items never existed on a marketplace
+    expect(s.priceAlerts).toEqual([]);
     expect(s.isProfileComplete).toBe(true);
     expect(s.profile.styleArchetypes[0]).toBe('Minimalist');
-    expect(s.priceAlerts[0]).toMatchObject({ id: 'alert-1', priceAtCreation: 30, status: 'active' });
     expect(s.questProgress['quest-003'].status).toBe('completed');
     expect(s.questProgress['quest-001']).toMatchObject({ status: 'in-progress', completedSteps: 2 });
     expect(s.questProgress['quest-008']).toBeUndefined(); // never actually rewarded
     expect(s.purchases).toEqual([]);
-    expect(s.catalog.length).toBe(SEED_ITEMS.length);
+    expect(s.catalog).toHaveLength(sampleCatalogRows().length);
     expect(s.recommendedItems[0].matchScore).toBeGreaterThan(0);
+  });
+
+  it('migrates a v2 snapshot, keeping progress and dropping sample-listing references', async () => {
+    const v2 = {
+      version: 2,
+      state: {
+        profile: { name: 'Two', totalXP: 900, points: 40, wishlist: ['item-001'], earnedBadges: { 'badge-001': '2026-10-01' } },
+        priceAlerts: [{ id: 'a1', itemId: 'item-002', targetPrice: 10, priceAtCreation: 20, createdAt: '2026-10-01T00:00:00.000Z', status: 'active' }],
+        purchases: [{ id: 'p1', itemId: 'item-003', title: 'Old', platform: 'Depop', pricePaid: 12, originalPrice: 40, co2Saved: 5, purchasedAt: '2026-10-01T00:00:00.000Z' }],
+        streak: { lastActiveDate: '2026-11-24', current: 4, longest: 9 },
+      },
+    };
+    await AsyncStorage.setItem(STORE_NAME, JSON.stringify(v2));
+    await useStore.persist.rehydrate();
+    expect(store().profile).toMatchObject({ name: 'Two', totalXP: 900, points: 40, wishlist: [], earnedBadges: { 'badge-001': '2026-10-01' } });
+    expect(store().priceAlerts).toEqual([]);
+    expect(store().purchases).toEqual([]);
+    expect(store().streak).toMatchObject({ current: 4, longest: 9 });
   });
 
   it('backs up unreadable data, starts fresh and keeps saving', async () => {
@@ -302,18 +477,18 @@ describe('reset & persistence', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('unreadable'));
     expect(store().hasHydrated).toBe(true);
     expect(store().storageAvailable).toBe(true);
-    expect(store().catalog.length).toBe(SEED_ITEMS.length);
+    expect(store().catalog).toHaveLength(sampleCatalogRows().length);
     expect(await AsyncStorage.getItem(`${STORE_NAME}${CORRUPT_BACKUP_SUFFIX}`)).toBe('{not json');
-    store().toggleWishlist('item-002');
+    store().toggleWishlist(JEANS);
     await flush();
-    expect(JSON.parse((await AsyncStorage.getItem(STORE_NAME))!).state.profile.wishlist).toEqual(['item-002']);
+    expect(JSON.parse((await AsyncStorage.getItem(STORE_NAME))!).state.profile.wishlist).toEqual([JEANS]);
     warn.mockRestore();
   });
 
   const savedSnapshot = () =>
     JSON.stringify({
       version: STORE_VERSION,
-      state: { profile: { name: 'Keep Me', totalXP: 2500, wishlist: ['item-004'] }, streak: { lastActiveDate: '2026-11-24', current: 30, longest: 30 } },
+      state: { profile: { name: 'Keep Me', totalXP: 2500, wishlist: [JEANS] }, streak: { lastActiveDate: '2026-11-24', current: 30, longest: 30 } },
     });
 
   const getItemMock = AsyncStorage.getItem as jest.Mock;
@@ -333,7 +508,7 @@ describe('reset & persistence', () => {
       expect(store().storageAvailable).toBe(false);
 
       // The app keeps working in memory, but nothing is written over the saved data.
-      store().toggleWishlist('item-001');
+      store().toggleWishlist(SHIRT);
       store().resetAllData(NOW);
       await flush();
       expect(await AsyncStorage.getItem(STORE_NAME)).toBe(saved);
@@ -341,7 +516,7 @@ describe('reset & persistence', () => {
       // Once storage reads work again, the data is intact and saving resumes.
       await useStore.persist.rehydrate();
       expect(store().storageAvailable).toBe(true);
-      expect(store().profile).toMatchObject({ name: 'Keep Me', totalXP: 2500, wishlist: ['item-004'] });
+      expect(store().profile).toMatchObject({ name: 'Keep Me', totalXP: 2500, wishlist: [JEANS] });
       expect(store().streak.current).toBe(30);
     } finally {
       warn.mockRestore();
@@ -354,5 +529,21 @@ describe('reset & persistence', () => {
     await useStore.persist.rehydrate();
     expect(store().storageAvailable).toBe(true);
     expect(store().profile.name).toBe('Keep Me');
+  });
+});
+
+describe('unconfigured build', () => {
+  it('reports that live prices are not connected and makes no requests', async () => {
+    const config = jest.requireMock('../config') as { backendConfig: unknown };
+    const original = config.backendConfig;
+    config.backendConfig = null;
+    try {
+      expect(await store().syncCatalog({ force: true })).toBe(false);
+      expect(store().catalogStatus).toBe('unconfigured');
+      expect(await store().checkItemLive(SHIRT)).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      config.backendConfig = original;
+    }
   });
 });

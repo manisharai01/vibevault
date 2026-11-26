@@ -105,15 +105,16 @@ export const STYLE_COLORS: Record<string, string> = {
 };
 
 export const PLATFORM_COLORS: Record<string, string> = {
+  Flipkart: '#2874F0',
+  eBay: '#E53238',
   Depop: '#FF2300',
   Poshmark: '#7B2E8D',
   Vinted: '#09B1BA',
   ThredUp: '#3D9B35',
-  'Local Thrift': '#FF9F43',
   Myntra: '#FF3F6C',
   Meesho: '#6E38E0',
   Amazon: '#FF9900',
-  Flipkart: '#2874F0',
+  Ajio: '#2C4152',
 };
 
 /** Text colour that stays readable on top of a style/platform colour chip. */

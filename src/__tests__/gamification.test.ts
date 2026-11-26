@@ -1,6 +1,5 @@
-import { QUEST_DEFINITIONS } from '../data/mockData';
+import { QUEST_DEFINITIONS } from '../data/content';
 import {
-  buildLeaderboard,
   computeSustainability,
   describeTimeLeft,
   getLevelInfo,
@@ -100,36 +99,30 @@ describe('quests', () => {
   });
 });
 
-describe('buildLeaderboard', () => {
-  it('includes the user, ranked by points with contiguous ranks', () => {
-    const board = buildLeaderboard({ name: 'Sam', points: 3000, level: 4, styleArchetype: 'Y2K' });
-    expect(board).toHaveLength(11);
-    expect(board.map((e) => e.rank)).toEqual(Array.from({ length: 11 }, (_, i) => i + 1));
-    const me = board.find((e) => e.isCurrentUser)!;
-    expect(me).toMatchObject({ name: 'Sam', rank: 5 });
-    for (let i = 1; i < board.length; i++) expect(board[i].points).toBeLessThanOrEqual(board[i - 1].points);
-  });
-
-  it('places a brand-new user last and keeps community members ahead on ties', () => {
-    expect(buildLeaderboard({ name: 'New', points: 0, level: 1, styleArchetype: null }).at(-1)?.isCurrentUser).toBe(true);
-    const tie = buildLeaderboard({ name: 'Tie', points: 4850, level: 9, styleArchetype: null });
-    expect(tie[0].isCurrentUser).toBe(false);
-    expect(tie[1].isCurrentUser).toBe(true);
-  });
-});
-
 describe('computeSustainability', () => {
-  it('is zero without purchases and sums purchases otherwise', () => {
-    expect(computeSustainability([])).toEqual({ totalCO2Saved: 0, itemsThrifted: 0, waterSavedLiters: 0, moneySaved: 0, treesEquivalent: 0 });
+  const base = { title: 'X', purchasedAt: '2026-11-25T10:00:00.000Z' };
+
+  it('is zero without purchases', () => {
+    expect(computeSustainability([])).toEqual({ totalCO2Saved: 0, itemsThrifted: 0, waterSavedLiters: 0, moneySavedInr: 0, treesEquivalent: 0 });
+  });
+
+  it('counts CO₂ only for pre-owned finds and savings in rupees for everything', () => {
     const purchases: Purchase[] = [
-      { id: '1', itemId: 'a', title: 'A', platform: 'Depop', pricePaid: 30, originalPrice: 90, co2Saved: 12.4, purchasedAt: '2026-11-25T10:00:00.000Z' },
-      { id: '2', itemId: 'b', title: 'B', platform: 'Vinted', pricePaid: 10, originalPrice: 8, co2Saved: 8.6, purchasedAt: '2026-11-25T10:00:00.000Z' },
+      // Pre-owned eBay find in dollars: $30 paid vs $90 retail at ₹90/$ → ₹5,400 saved.
+      { ...base, id: '1', itemId: 'ebay:1', platform: 'eBay', currency: 'USD', pricePaid: 30, originalPrice: 90, inrRate: 90, secondhand: true, co2Saved: 12.4 },
+      // Pre-owned, paid above retail: never negative savings.
+      { ...base, id: '2', itemId: 'ebay:2', platform: 'eBay', currency: 'USD', pricePaid: 10, originalPrice: 8, inrRate: 90, secondhand: true, co2Saved: 8.6 },
+      // New Flipkart item: ₹1,299 MRP, paid ₹649 → ₹650 saved, no CO₂.
+      { ...base, id: '3', itemId: 'flipkart:3', platform: 'Flipkart', currency: 'INR', pricePaid: 649, originalPrice: 1299, inrRate: 1, secondhand: false, co2Saved: 0 },
+      // Unknown exchange rate / no retail price: not counted in money saved.
+      { ...base, id: '4', itemId: 'ebay:4', platform: 'eBay', currency: 'USD', pricePaid: 10, originalPrice: 50, inrRate: null, secondhand: true, co2Saved: 0 },
+      { ...base, id: '5', itemId: 'flipkart:5', platform: 'Flipkart', currency: 'INR', pricePaid: 500, originalPrice: null, inrRate: 1, secondhand: false, co2Saved: 0 },
     ];
     expect(computeSustainability(purchases)).toEqual({
       totalCO2Saved: 21,
-      itemsThrifted: 2,
+      itemsThrifted: 3,
       waterSavedLiters: 3780,
-      moneySaved: 60, // a purchase above retail never counts as negative savings
+      moneySavedInr: 6050,
       treesEquivalent: 1,
     });
   });

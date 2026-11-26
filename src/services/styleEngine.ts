@@ -20,6 +20,7 @@ import {
   StyleScores,
   UserProfile,
 } from '../types';
+import { priceInInr } from './catalog';
 import { getDealScore } from './priceEngine';
 
 type Affinity = Partial<Record<StyleArchetype, number>>;
@@ -81,19 +82,19 @@ const WEEKEND_STYLE_MAP: Record<string, Affinity> = {
 
 const WEIGHTS = { personality: 0.4, music: 0.35, media: 0.25, palette: 0.45, weekend: 0.45 };
 
-/** Upper bound of each budget tier in USD (per item). */
+/** Upper bound of each budget tier in rupees (per item). */
 export const BUDGET_LIMITS: Record<BudgetTier, number> = {
-  'budget-low': 10,
-  'budget-mid': 30,
-  'budget-high': 60,
+  'budget-low': 500,
+  'budget-mid': 1500,
+  'budget-high': 3000,
   'budget-premium': Number.POSITIVE_INFINITY,
 };
 
 export const BUDGET_LABELS: Record<BudgetTier, string> = {
-  'budget-low': 'Under $10',
-  'budget-mid': '$10 – $30',
-  'budget-high': '$30 – $60',
-  'budget-premium': '$60+',
+  'budget-low': 'Under ₹500',
+  'budget-mid': '₹500 – ₹1,500',
+  'budget-high': '₹1,500 – ₹3,000',
+  'budget-premium': '₹3,000+',
 };
 
 const PERSONALITY_VALUES = Object.keys(PERSONALITY_STYLE_MAP) as PersonalityDimension[];
@@ -259,16 +260,21 @@ export function scoreItem(item: FashionItem, profile: ScoringProfile): number {
   const sustainBonus = (item.sustainabilityScore / 100) * (5 + 15 * priority);
 
   // Discount vs retail (max 12) and expected price drop (max 8).
-  const discount = item.originalPrice > 0 ? Math.max(0, 1 - item.currentPrice / item.originalPrice) : 0;
-  const drop7d = item.currentPrice > 0 ? Math.max(0, (item.currentPrice - item.predictedPrice7d) / item.currentPrice) : 0;
+  const discount =
+    item.originalPrice !== null && item.originalPrice > 0 ? Math.max(0, 1 - item.currentPrice / item.originalPrice) : 0;
+  const drop7d =
+    item.predictedPrice7d !== null && item.currentPrice > 0
+      ? Math.max(0, (item.currentPrice - item.predictedPrice7d) / item.currentPrice)
+      : 0;
   const dealBonus = discount * 12 + Math.min(1, drop7d * 5) * 8;
 
   // Budget fit: penalise listings well above the user's per-item budget.
   let budgetPenalty = 0;
   if (profile.budgetTier) {
     const limit = BUDGET_LIMITS[profile.budgetTier];
-    if (Number.isFinite(limit) && item.currentPrice > limit) {
-      budgetPenalty = Math.min(20, ((item.currentPrice - limit) / limit) * 20);
+    const priceInr = priceInInr(item);
+    if (Number.isFinite(limit) && priceInr !== null && priceInr > limit) {
+      budgetPenalty = Math.min(20, ((priceInr - limit) / limit) * 20);
     }
   }
 

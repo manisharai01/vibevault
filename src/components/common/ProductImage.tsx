@@ -21,7 +21,7 @@ const CATEGORY_ICONS: Record<ItemCategory, React.ComponentProps<typeof Ionicons>
 };
 
 interface ProductImageProps {
-  uri: string;
+  uri: string | null;
   style?: StyleProp<ImageStyle>;
   category?: ItemCategory;
   colors?: string[];
