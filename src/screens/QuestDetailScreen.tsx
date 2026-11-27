@@ -81,7 +81,7 @@ export default function QuestDetailScreen() {
         };
       case 'open-composer':
         return {
-          label: '👗 Open Wardrobe Composer',
+          label: '👗 Open the Stylist',
           role: 'button' as const,
           onPress: () => navigation.navigate('Compose', { screen: 'ComposeMain', pop: true }),
         };

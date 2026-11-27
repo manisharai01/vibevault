@@ -5,19 +5,28 @@
 // ============================================================
 
 import { useMemo } from 'react';
+import { matchesShopFor } from '../constants/marketplaces';
 import { QUEST_DEFINITIONS } from '../data/content';
 import { computeSustainability, getLevelInfo, LevelInfo, mergeQuest } from '../services/gamification';
-import { FashionItem, PriceAlert, Quest, SustainabilityMetrics } from '../types';
+import { FashionItem, Offer, PriceAlert, Quest, SustainabilityMetrics, TrackRecord } from '../types';
 import { useStore } from './useStore';
 
 export function useItem(itemId: string | undefined): FashionItem | undefined {
   return useStore((s) => (itemId ? s.recommendedItems.find((item) => item.id === itemId) : undefined));
 }
 
-/** Ranked listings that can still be bought (excludes sold items kept for the wishlist/alerts). */
+/**
+ * Ranked listings the user can buy now: available, offered in their country and in the
+ * sections they shop (sold items kept for the wishlist/alerts are left out).
+ */
 export function useAvailableItems(): FashionItem[] {
   const items = useStore((s) => s.recommendedItems);
-  return useMemo(() => items.filter((item) => item.available), [items]);
+  const shopFor = useStore((s) => s.profile.shopFor);
+  const country = useStore((s) => s.profile.country);
+  return useMemo(
+    () => items.filter((item) => item.available && matchesShopFor(item.department, shopFor) && (!country || item.market === country)),
+    [items, shopFor, country],
+  );
 }
 
 export function useWishlistItems(): FashionItem[] {
@@ -27,6 +36,40 @@ export function useWishlistItems(): FashionItem[] {
     const byId = new Map(items.map((item) => [item.id, item]));
     return wishlist.map((id) => byId.get(id)).filter((item): item is FashionItem => item !== undefined);
   }, [wishlist, items]);
+}
+
+/** Offers that are in date and were confirmed by their feed in the last 26 hours. */
+export function isOfferCurrent(offer: Offer, now: Date = new Date()): boolean {
+  const t = now.getTime();
+  if (offer.endsAt && new Date(offer.endsAt).getTime() <= t) return false;
+  if (offer.startsAt && new Date(offer.startsAt).getTime() > t) return false;
+  return t - new Date(offer.lastSeenAt).getTime() <= 26 * 3_600_000;
+}
+
+export function useOffers(): Offer[] {
+  const offers = useStore((s) => s.offers);
+  return useMemo(() => offers.filter((o) => isOfferCurrent(o)), [offers]);
+}
+
+/** Coupons for one listing: the marketplace's promo on it, then the marketplace's store-wide offers. */
+export function useOffersForItem(item: Pick<FashionItem, 'id' | 'source' | 'market'> | undefined): Offer[] {
+  const offers = useOffers();
+  return useMemo(() => {
+    if (!item) return [];
+    const own = offers.filter((o) => o.listingId === item.id);
+    const store = offers.filter((o) => !o.listingId && o.source === item.source && o.market === item.market);
+    return [...own, ...store];
+  }, [offers, item]);
+}
+
+/** The model's track record for a horizon (overall, or for one marketplace when it has enough). */
+export function useTrackRecord(horizon: number, source?: string): TrackRecord | null {
+  const records = useStore((s) => s.trackRecord);
+  return useMemo(() => {
+    const forSource = source ? records.find((r) => r.horizon === horizon && r.source === source) : undefined;
+    if (forSource && forSource.resolved >= 30) return forSource;
+    return records.find((r) => r.horizon === horizon && r.source === null) ?? null;
+  }, [records, horizon, source]);
 }
 
 export function useQuests(): Quest[] {
@@ -49,7 +92,9 @@ export function useLevelInfo(): LevelInfo {
 
 export function useSustainability(): SustainabilityMetrics {
   const purchases = useStore((s) => s.purchases);
-  return useMemo(() => computeSustainability(purchases), [purchases]);
+  const currency = useStore((s) => s.profile.currency);
+  const rates = useStore((s) => s.fxRates);
+  return useMemo(() => computeSustainability(purchases, currency, rates), [purchases, currency, rates]);
 }
 
 export function useUnseenTriggeredAlertCount(): number {

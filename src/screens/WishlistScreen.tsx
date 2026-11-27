@@ -1,6 +1,6 @@
 // ============================================================
 // VibeVault – Wishlist Screen
-// Saved listings with live prices, forecast drops and alerts.
+// Saved listings with live prices, buy-or-wait advice and alerts.
 // Listings that sell out stay visible (marked) until removed.
 // ============================================================
 
@@ -19,7 +19,8 @@ import EmptyState from '../components/common/EmptyState';
 import ProductImage from '../components/common/ProductImage';
 import ScreenHeader from '../components/common/ScreenHeader';
 import Tag from '../components/common/Tag';
-import { formatInr, formatMoney, percentOff, toInr } from '../utils/format';
+import { getBuyAdvice, isAtRecordLow } from '../services/priceEngine';
+import { convertAmount, formatMoney, formatMoneyWhole, formatPercent, percentOff } from '../utils/format';
 
 type Nav = CompositeNavigationProp<
   NativeStackNavigationProp<ProfileStackParamList, 'Wishlist'>,
@@ -29,12 +30,14 @@ type Nav = CompositeNavigationProp<
 export default function WishlistScreen() {
   const navigation = useNavigation<Nav>();
   const wishlistItems = useWishlistItems();
-  const { isProfileComplete, priceAlerts, toggleWishlist, wishlistIds } = useStore(
+  const { isProfileComplete, priceAlerts, toggleWishlist, wishlistIds, homeCurrency, rates } = useStore(
     useShallow((s) => ({
       isProfileComplete: s.isProfileComplete,
       priceAlerts: s.priceAlerts,
       toggleWishlist: s.toggleWishlist,
       wishlistIds: s.profile.wishlist,
+      homeCurrency: s.profile.currency,
+      rates: s.fxRates,
     })),
   );
   // Saved ids whose listing isn't loaded (e.g. offline before the first sync).
@@ -44,10 +47,10 @@ export default function WishlistScreen() {
   }, [wishlistIds, wishlistItems]);
 
   const alertItemIds = useMemo(() => new Set(priceAlerts.filter((a) => a.status === 'active').map((a) => a.itemId)), [priceAlerts]);
-  // Discount vs MRP/retail across available items, in rupees.
-  const totalSavingsInr = wishlistItems.reduce((sum, item) => {
+  // Discount vs list price / MRP across available items, in the user's currency.
+  const totalSavings = wishlistItems.reduce((sum, item) => {
     if (!item.available || item.originalPrice === null) return sum;
-    return sum + (toInr(Math.max(0, item.originalPrice - item.currentPrice), item.inrRate) ?? 0);
+    return sum + (convertAmount(Math.max(0, item.originalPrice - item.currentPrice), item.currency, homeCurrency, rates) ?? 0);
   }, 0);
   const avgMatch =
     wishlistItems.length > 0 ? Math.round(wishlistItems.reduce((sum, item) => sum + item.matchScore, 0) / wishlistItems.length) : 0;
@@ -55,7 +58,8 @@ export default function WishlistScreen() {
   const renderItem = useCallback(
     ({ item }: { item: FashionItem }) => {
       const savePct = percentOff(item.currentPrice, item.originalPrice);
-      const dropsSoon = item.available && item.predictedPrice7d !== null && item.predictedPrice7d < item.currentPrice * 0.99;
+      const advice = item.available ? getBuyAdvice(item) : null;
+      const recordLow = item.available && isAtRecordLow(item);
       const money = (value: number) => formatMoney(value, item.currency);
       return (
         <TouchableOpacity
@@ -96,12 +100,20 @@ export default function WishlistScreen() {
               )}
             </View>
             {!item.available && <Text style={styles.unavailableHint}>Sold out or removed on {item.platform}</Text>}
-            {dropsSoon && item.predictedPrice7d !== null && (
-              <Text style={styles.dropHint}>📉 Recorded prices point to ~{money(item.predictedPrice7d)} within 7 days</Text>
-            )}
+            {recordLow ? (
+              <Text style={styles.dropHint}>🏷️ Lowest price recorded — a good time to buy</Text>
+            ) : advice ? (
+              <Text style={styles.dropHint}>
+                {advice.verdict === 'wait'
+                  ? `⏳ Wait: ${formatPercent(advice.pDrop)} chance it gets 5%+ cheaper within ${advice.horizon} days`
+                  : advice.verdict === 'buy'
+                    ? `🟢 Buy now: only ${formatPercent(advice.pDrop)} chance of a 5%+ drop in ${advice.horizon} days`
+                    : `⚖️ ${formatPercent(advice.pDrop)} chance of a 5%+ drop in ${advice.horizon} days`}
+              </Text>
+            ) : null}
             <View style={styles.cardBottom}>
-              <View style={[styles.platformChip, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}>
-                <Text style={styles.platformText}>{item.platform}</Text>
+              <View style={[styles.platformChip, { backgroundColor: PLATFORM_COLORS[item.source] || Colors.primary }]}>
+                <Text style={styles.platformText}>{item.siteName}</Text>
               </View>
               {alertItemIds.has(item.id) && (
                 <View style={styles.alertChip}>
@@ -135,8 +147,8 @@ export default function WishlistScreen() {
               <Text style={styles.statLabel}>Saved</Text>
             </View>
             <View style={styles.stat}>
-              <Text style={styles.statValue}>{formatInr(totalSavingsInr)}</Text>
-              <Text style={styles.statLabel}>Off MRP / retail</Text>
+              <Text style={styles.statValue}>{formatMoneyWhole(totalSavings, homeCurrency)}</Text>
+              <Text style={styles.statLabel}>Off list price</Text>
             </View>
             {isProfileComplete && (
               <View style={styles.stat}>

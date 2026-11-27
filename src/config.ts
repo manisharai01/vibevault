@@ -13,7 +13,8 @@ export interface BackendConfig {
 function readConfig(): BackendConfig | null {
   const url = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim().replace(/\/+$/, '');
   const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim();
-  if (!url || !anonKey || !/^https?:\/\//.test(url)) return null;
+  // The example's placeholder URL counts as not configured.
+  if (!url || !anonKey || !/^https?:\/\//.test(url) || url.includes('your-project-ref')) return null;
   return { url, anonKey };
 }
 

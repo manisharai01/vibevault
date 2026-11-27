@@ -1,0 +1,20 @@
+# Same line endings on every OS: LF in the repository and in every checkout (editors on Windows
+# handle LF fine), so scripts, SQL and diffs behave identically for everyone.
+* text=auto eol=lf
+
+# Windows-only scripts keep CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files are never touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.jar binary
+*.keystore binary

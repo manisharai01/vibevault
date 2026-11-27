@@ -1,175 +1,198 @@
 import { QUESTION_IDS } from '../data/profilerQuestions';
-import {
-  buildStyleProfile,
-  computeStyleScores,
-  computeVibeScore,
-  deriveSignals,
-  generateVibeSummary,
-  getRecommendations,
-  scoreItem,
-} from '../services/styleEngine';
-import { getDealScore } from '../services/priceEngine';
+import { colorFamilies, fitOf, formalityOf, occasionsOf } from '../services/itemTraits';
+import { buildStyleProfile, deriveSignals, getRecommendations, scoreItem } from '../services/styleEngine';
 import { createDefaultProfile } from '../store/persistence';
-import { ProfilerAnswers } from '../types';
-import { makeEbayItem, sampleCatalog } from './helpers/fixtures';
+import { ProfilerAnswers, TasteRating, UserProfile } from '../types';
+import { makeEbayItem, makeItem, NOW, predictionJson, RATES, sampleCatalog } from './helpers/fixtures';
 
-const NOW = new Date(2026, 10, 25, 10, 0);
-const catalog = sampleCatalog();
+const Q = QUESTION_IDS;
 
-const darkAcademia: ProfilerAnswers = {
-  [QUESTION_IDS.personality]: 'introvert',
-  [QUESTION_IDS.thinking]: 'analytical',
-  [QUESTION_IDS.music]: ['classical', 'jazz'],
-  [QUESTION_IDS.media]: ['documentary', 'thriller'],
-  [QUESTION_IDS.palette]: 'dark-academia',
-  [QUESTION_IDS.weekend]: 'dark-academia',
-  [QUESTION_IDS.sustainability]: 75,
-  [QUESTION_IDS.budget]: 'budget-mid',
+/** A polished, minimal-leaning person who works in an office. */
+const polishedAnswers: ProfilerAnswers = {
+  [Q.country]: 'IN',
+  [Q.shopFor]: 'women',
+  [Q.social]: 'observer',
+  [Q.trends]: 'wait',
+  [Q.routine]: 'planned',
+  [Q.compliment]: 'put-together',
+  [Q.rules]: 'helpful',
+  [Q.freeDay]: 'cafe',
+  [Q.colorsLove]: ['black', 'white', 'neutral'],
+  [Q.colorsAvoid]: ['yellow'],
+  [Q.fit]: 'fitted',
+  [Q.occasions]: ['work', 'everyday'],
+  [Q.budget]: 1500,
+  [Q.sustainability]: 25,
 };
 
-const streetwear: ProfilerAnswers = {
-  [QUESTION_IDS.personality]: 'extrovert',
-  [QUESTION_IDS.thinking]: 'avant-garde',
-  [QUESTION_IDS.music]: ['hip-hop', 'electronic'],
-  [QUESTION_IDS.media]: ['anime', 'action'],
-  [QUESTION_IDS.palette]: 'streetwear',
-  [QUESTION_IDS.weekend]: 'streetwear',
-  [QUESTION_IDS.sustainability]: 25,
-  [QUESTION_IDS.budget]: 'budget-high',
+/** An expressive, rule-breaking person who goes out a lot. */
+const boldAnswers: ProfilerAnswers = {
+  [Q.country]: 'IN',
+  [Q.shopFor]: 'men',
+  [Q.social]: 'center',
+  [Q.trends]: 'first',
+  [Q.routine]: 'mood',
+  [Q.compliment]: 'cool',
+  [Q.rules]: 'break',
+  [Q.freeDay]: 'city',
+  [Q.colorsLove]: ['black', 'red'],
+  [Q.fit]: 'oversized',
+  [Q.occasions]: ['evening'],
+  [Q.budget]: null,
 };
 
-const profileFrom = (answers: ProfilerAnswers) => {
-  const result = buildStyleProfile(answers);
+function profileFrom(answers: ProfilerAnswers, taste: TasteRating[] = []): UserProfile {
+  const result = buildStyleProfile(answers, taste);
   return {
     ...createDefaultProfile(NOW),
+    country: result.country,
+    currency: 'INR',
+    shopFor: result.shopFor,
+    traits: result.traits,
+    likedColors: result.likedColors,
+    avoidColors: result.avoidColors,
+    fit: result.fit,
+    occasions: result.occasions,
+    budgetMax: result.budgetMax,
+    tasteRatings: taste,
+    styleArchetypes: result.topStyles,
     styleScores: result.styleScores,
-    budgetTier: result.budgetTier,
+    styleReasons: result.reasons,
+    vibeScore: result.vibeScore,
     sustainabilityPriority: result.sustainabilityPriority,
   };
-};
+}
 
-describe('deriveSignals', () => {
-  it('extracts every answer and ignores invalid values', () => {
-    const signals = deriveSignals({
-      ...darkAcademia,
-      [QUESTION_IDS.music]: ['jazz', 'not-a-genre', 'jazz'],
-      [QUESTION_IDS.media]: 'documentary',
-      [QUESTION_IDS.budget]: 'budget-unknown',
+describe('profiler answers → signals', () => {
+  it('reads every answer and ignores invalid ones', () => {
+    const signals = deriveSignals({ ...polishedAnswers, [Q.colorsAvoid]: ['yellow', 'black', 'tartan'], [Q.fit]: 'baggy', [Q.country]: 'XX' });
+    expect(signals).toMatchObject({
+      country: null,
+      shopFor: 'women',
+      likedColors: ['black', 'white', 'neutral'],
+      // A colour can't be loved and avoided; unknown colours are dropped.
+      avoidColors: ['yellow'],
+      fit: null,
+      occasions: ['work', 'everyday'],
+      budgetMax: 1500,
+      sustainabilityPriority: 25,
     });
-    expect(signals.personality).toEqual(['introvert', 'analytical']);
-    expect(signals.music).toEqual(['jazz']);
-    expect(signals.media).toEqual([]);
-    expect(signals.palette).toBe('dark-academia');
-    expect(signals.weekend).toBe('dark-academia');
-    expect(signals.budgetTier).toBeNull();
-    expect(signals.sustainabilityPriority).toBe(75);
+    expect(signals.traits.polish).toBeGreaterThan(0.9);
+    expect(signals.traits.expressive).toBeLessThan(0);
   });
 
-  it('defaults sustainability to 50 and clamps out-of-range values', () => {
-    expect(deriveSignals({}).sustainabilityPriority).toBe(50);
-    expect(deriveSignals({ [QUESTION_IDS.sustainability]: 400 }).sustainabilityPriority).toBe(100);
+  it('defaults missing answers', () => {
+    expect(deriveSignals({})).toMatchObject({ country: null, shopFor: null, budgetMax: null, sustainabilityPriority: 50, traits: {} });
   });
 });
 
-describe('style scores', () => {
-  it('normalises to 0–100 with the strongest archetype first', () => {
-    const scores = computeStyleScores(deriveSignals(darkAcademia));
-    expect(scores[0]).toEqual(['Dark Academia', 100]);
-    for (let i = 1; i < scores.length; i++) expect(scores[i][1]).toBeLessThanOrEqual(scores[i - 1][1]);
-    scores.forEach(([, v]) => {
-      expect(v).toBeGreaterThan(0);
-      expect(v).toBeLessThanOrEqual(100);
-    });
+describe('style profile', () => {
+  it('turns a polished personality into Minimalist / Preppy / Dark Academia, with reasons', () => {
+    const result = buildStyleProfile(polishedAnswers);
+    expect(result.topStyles[0]).toBe('Minimalist');
+    expect(result.topStyles).toEqual(expect.arrayContaining(['Preppy']));
+    expect(result.styleScores.Minimalist).toBe(100);
+    expect(result.styleScores.Grunge ?? 0).toBe(0);
+    const why = result.reasons.filter((r) => r.archetype === 'Minimalist').map((r) => r.text);
+    expect(why.join(' ')).toMatch(/polished/);
+    expect(why.join(' ')).toMatch(/colours you love/);
+    expect(result.vibeSummary).toMatch(/^Your vibe/);
   });
 
-  it('lets palette and weekend answers shift the result', () => {
-    const base = { ...darkAcademia, [QUESTION_IDS.palette]: 'cottagecore', [QUESTION_IDS.weekend]: 'cottagecore' };
-    const withCottage = Object.fromEntries(computeStyleScores(deriveSignals(base)));
-    const withDark = Object.fromEntries(computeStyleScores(deriveSignals(darkAcademia)));
-    expect(withCottage.Cottagecore).toBeGreaterThan(withDark.Cottagecore ?? 0);
+  it('turns an expressive rule-breaker into Streetwear / Grunge / Y2K', () => {
+    const result = buildStyleProfile(boldAnswers);
+    expect(result.topStyles).toEqual(expect.arrayContaining(['Streetwear', 'Grunge']));
+    expect(result.styleScores.Preppy ?? 0).toBe(0);
   });
 
-  it('returns nothing for an empty profile', () => {
-    expect(computeStyleScores(deriveSignals({}))).toEqual([]);
-    expect(computeVibeScore(deriveSignals({}))).toBe(0);
+  it('lets the taste check on real listings move the result', () => {
+    const lovesBoho: TasteRating[] = [
+      { itemId: 'a', liked: true, archetypes: ['Bohemian'], colors: ['green'], category: 'Dresses' },
+      { itemId: 'b', liked: true, archetypes: ['Bohemian', 'Cottagecore'], colors: ['pink'], category: 'Tops' },
+      { itemId: 'c', liked: true, archetypes: ['Bohemian'], colors: ['brown'], category: 'Bags' },
+      { itemId: 'd', liked: false, archetypes: ['Minimalist'], colors: ['black'], category: 'Tops' },
+    ];
+    const before = buildStyleProfile(polishedAnswers);
+    const after = buildStyleProfile(polishedAnswers, lovesBoho);
+    expect((after.styleScores.Bohemian ?? 0) > (before.styleScores.Bohemian ?? 0)).toBe(true);
+    expect(after.reasons.some((r) => r.text === "You'd wear 3 Bohemian pieces from the taste check")).toBe(true);
   });
 
-  it('gives focused profiles a higher vibe strength than eclectic ones', () => {
-    const eclectic: ProfilerAnswers = {
-      [QUESTION_IDS.personality]: 'creative',
-      [QUESTION_IDS.thinking]: 'creative',
-      [QUESTION_IDS.music]: ['pop', 'rock', 'hip-hop', 'jazz', 'electronic', 'classical', 'indie', 'r&b', 'country', 'metal'],
-      [QUESTION_IDS.media]: ['action', 'romance', 'sci-fi', 'documentary', 'anime', 'comedy', 'thriller', 'drama'],
-    };
-    const focused = computeVibeScore(deriveSignals(darkAcademia));
-    const wide = computeVibeScore(deriveSignals(eclectic));
-    expect(focused).toBeGreaterThan(wide);
-    expect(focused).toBeLessThanOrEqual(100);
-    expect(wide).toBeGreaterThanOrEqual(40);
-  });
-
-  it('builds a complete profile result', () => {
-    const result = buildStyleProfile(streetwear);
-    expect(result.topStyles[0]).toBe('Streetwear');
-    expect(result.topStyles).toHaveLength(3);
-    expect(result.vibeSummary).toMatch(/^Your vibe fuses/);
-    expect(result.budgetTier).toBe('budget-high');
-  });
-
-  it('writes summaries for 0–3 archetypes', () => {
-    expect(generateVibeSummary([])).toBe('Express yourself through fashion!');
-    expect(generateVibeSummary(['Y2K'])).toMatch(/^Your vibe:/);
-    expect(generateVibeSummary(['Y2K', 'Grunge'])).toMatch(/^Your vibe blends/);
+  it('is deterministic', () => {
+    expect(buildStyleProfile(polishedAnswers)).toEqual(buildStyleProfile(polishedAnswers));
   });
 });
 
-describe('scoring & recommendations', () => {
-  it('keeps every match score within 0–100', () => {
-    for (const answers of [darkAcademia, streetwear]) {
-      const profile = profileFrom(answers);
-      for (const item of catalog) {
-        const score = scoreItem(item, profile);
-        expect(score).toBeGreaterThanOrEqual(0);
-        expect(score).toBeLessThanOrEqual(100);
-      }
-    }
+describe('listing traits', () => {
+  it('reads colour families, occasions, formality and fit from the listing', () => {
+    const blazer = makeItem({ title: 'Women Slim Fit Wool Blazer', description: null, category: 'Outerwear', colors: ['#1C1C1C', '#C19A6B'] });
+    expect(colorFamilies(blazer)).toEqual(['black', 'brown']);
+    expect(occasionsOf(blazer)).toEqual(['work']);
+    expect(formalityOf(blazer)).toBe(3);
+    expect(fitOf(blazer)).toBe('fitted');
+    const joggers = makeItem({ title: 'Men Running Joggers', description: null, category: 'Bottoms', style_archetypes: ['Athleisure'] });
+    expect(occasionsOf(joggers)).toEqual(['active']);
+    expect(formalityOf(joggers)).toBe(1);
+    expect(occasionsOf(makeItem({ title: 'Women Kurta Set with Dupatta', description: null }))).toEqual(['festive']);
+    expect(occasionsOf(makeItem({ title: 'Plain top', description: null }))).toEqual(['everyday']);
+  });
+});
+
+describe('matching listings', () => {
+  const profile = profileFrom(polishedAnswers);
+
+  it('scores a listing with the reasons that added most', () => {
+    const shirt = makeItem({
+      title: 'Women White Linen Shirt for work',
+      department: 'women',
+      style_archetypes: ['Minimalist'],
+      colors: ['#F5F5F5'],
+      current_price: 899,
+      prediction: predictionJson(899, 0.1),
+    });
+    const match = scoreItem(shirt, profile, { rates: RATES });
+    expect(match.score).toBeGreaterThan(70);
+    expect(match.reasons).toEqual(['Matches your Minimalist style', 'In colours you love (white)', 'Good for work & office']);
   });
 
-  it('ranks on-style items above off-style items', () => {
-    const recs = getRecommendations(catalog, profileFrom(streetwear));
-    expect(recs[0].styleArchetypes.some((s) => s === 'Streetwear' || s === 'Y2K')).toBe(true);
-    for (let i = 1; i < recs.length; i++) expect(recs[i].matchScore).toBeLessThanOrEqual(recs[i - 1].matchScore);
-    const dark = getRecommendations(catalog, profileFrom(darkAcademia));
-    expect(dark.slice(0, 3).every((item) => item.styleArchetypes.some((s) => ['Dark Academia', 'Minimalist', 'Preppy'].includes(s)))).toBe(true);
+  it('penalises colours the user never wears and pieces well over budget', () => {
+    const base = { department: 'women', style_archetypes: ['Minimalist'], current_price: 899 };
+    const ok = scoreItem(makeItem({ ...base, colors: ['#F5F5F5'] }), profile, { rates: RATES }).score;
+    const avoided = scoreItem(makeItem({ ...base, colors: ['#E0B526'] }), profile, { rates: RATES }).score;
+    const pricey = scoreItem(makeItem({ ...base, colors: ['#F5F5F5'], current_price: 4500 }), profile, { rates: RATES }).score;
+    expect(avoided).toBeLessThan(ok - 20);
+    expect(pricey).toBeLessThan(ok - 25);
   });
 
-  it('penalises items above the user’s budget (in rupees, converting other currencies)', () => {
-    const item = { ...catalog[0], currentPrice: 2500 };
-    const base = profileFrom(darkAcademia);
-    expect(scoreItem(item, { ...base, budgetTier: 'budget-low' })).toBeLessThan(scoreItem(item, { ...base, budgetTier: 'budget-premium' }));
-    // $30 ≈ ₹2,767: over a ₹500 budget, within ₹3,000+.
-    const usd = makeEbayItem({ current_price: 30 });
-    expect(scoreItem(usd, { ...base, budgetTier: 'budget-low' })).toBeLessThan(scoreItem(usd, { ...base, budgetTier: 'budget-premium' }));
-    // Unknown exchange rate: no budget penalty either way.
-    const unknown = makeEbayItem({ current_price: 30, inr_rate: null });
-    expect(scoreItem(unknown, { ...base, budgetTier: 'budget-low' })).toBe(scoreItem(unknown, { ...base, budgetTier: 'budget-premium' }));
+  it('converts foreign prices before comparing with the budget, and never guesses without a rate', () => {
+    const dollars = makeEbayItem({ department: 'women', style_archetypes: ['Minimalist'], current_price: 12 });
+    const withRate = scoreItem(dollars, profile, { rates: RATES });
+    const noRate = scoreItem(dollars, profile, { rates: null });
+    expect(withRate.reasons).toContain('Within your ₹1,500 budget');
+    expect(noRate.reasons).not.toContain('Within your ₹1,500 budget');
   });
 
-  it('weights sustainability by how much the user cares', () => {
-    const item = { ...catalog[0], sustainabilityScore: 100 };
-    const base = profileFrom(darkAcademia);
-    expect(scoreItem(item, { ...base, sustainabilityPriority: 100 })).toBeGreaterThan(scoreItem(item, { ...base, sustainabilityPriority: 0 }));
+  it('learns from saved pieces', () => {
+    const item = makeItem({ title: 'Floral boho dress', department: 'women', style_archetypes: ['Bohemian'], colors: ['#556B2F'] });
+    const plain = scoreItem(item, profile, { rates: RATES }).score;
+    const learnt = scoreItem(item, profile, {
+      rates: RATES,
+      signals: [{ archetypes: ['Bohemian'], colors: ['green'], category: 'Dresses', liked: true }],
+    });
+    expect(learnt.score).toBeGreaterThan(plain);
+    expect(learnt.reasons).toContain('Like pieces you saved');
   });
 
-  it('without a style profile, ranks by deal score with no match scores', () => {
-    const recs = getRecommendations(catalog, createDefaultProfile(NOW));
-    expect(recs.every((i) => i.matchScore === 0)).toBe(true);
-    for (let i = 1; i < recs.length; i++) expect(getDealScore(recs[i])).toBeLessThanOrEqual(getDealScore(recs[i - 1]));
-  });
+  it('ranks the user’s sections first and is 0 without a profile', () => {
+    const catalog = sampleCatalog();
+    const ranked = getRecommendations(catalog, profile, RATES);
+    const firstMen = ranked.findIndex((i) => i.department === 'men');
+    const lastWomen = ranked.map((i) => i.department).lastIndexOf('women');
+    expect(lastWomen).toBeLessThan(firstMen);
+    expect(ranked.filter((i) => i.department === 'men').every((i) => i.matchScore === 0)).toBe(true);
+    expect(ranked[0].matchScore).toBeGreaterThan(50);
 
-  it('does not mutate the catalogue', () => {
-    const before = JSON.stringify(catalog);
-    getRecommendations(catalog, profileFrom(streetwear));
-    expect(JSON.stringify(catalog)).toBe(before);
+    const anonymous = getRecommendations(catalog, createDefaultProfile(NOW), RATES);
+    expect(anonymous.every((i) => i.matchScore === 0)).toBe(true);
   });
 });

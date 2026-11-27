@@ -103,27 +103,27 @@ describe('computeSustainability', () => {
   const base = { title: 'X', purchasedAt: '2026-11-25T10:00:00.000Z' };
 
   it('is zero without purchases', () => {
-    expect(computeSustainability([])).toEqual({ totalCO2Saved: 0, itemsThrifted: 0, waterSavedLiters: 0, moneySavedInr: 0, treesEquivalent: 0 });
+    expect(computeSustainability([], 'INR', null)).toEqual({ purchases: 0, itemsThrifted: 0, moneySaved: 0, currency: 'INR' });
   });
 
-  it('counts CO₂ only for pre-owned finds and savings in rupees for everything', () => {
+  it('counts purchases and pre-owned finds, and adds up savings in the user’s currency', () => {
     const purchases: Purchase[] = [
-      // Pre-owned eBay find in dollars: $30 paid vs $90 retail at ₹90/$ → ₹5,400 saved.
-      { ...base, id: '1', itemId: 'ebay:1', platform: 'eBay', currency: 'USD', pricePaid: 30, originalPrice: 90, inrRate: 90, secondhand: true, co2Saved: 12.4 },
-      // Pre-owned, paid above retail: never negative savings.
-      { ...base, id: '2', itemId: 'ebay:2', platform: 'eBay', currency: 'USD', pricePaid: 10, originalPrice: 8, inrRate: 90, secondhand: true, co2Saved: 8.6 },
-      // New Flipkart item: ₹1,299 MRP, paid ₹649 → ₹650 saved, no CO₂.
-      { ...base, id: '3', itemId: 'flipkart:3', platform: 'Flipkart', currency: 'INR', pricePaid: 649, originalPrice: 1299, inrRate: 1, secondhand: false, co2Saved: 0 },
-      // Unknown exchange rate / no retail price: not counted in money saved.
-      { ...base, id: '4', itemId: 'ebay:4', platform: 'eBay', currency: 'USD', pricePaid: 10, originalPrice: 50, inrRate: null, secondhand: true, co2Saved: 0 },
-      { ...base, id: '5', itemId: 'flipkart:5', platform: 'Flipkart', currency: 'INR', pricePaid: 500, originalPrice: null, inrRate: 1, secondhand: false, co2Saved: 0 },
+      // Pre-owned eBay find: $30 paid vs $90 list price, recorded as ₹5,400 saved at the time.
+      { ...base, id: '1', itemId: 'ebay:IN:1', platform: 'eBay', currency: 'USD', pricePaid: 30, originalPrice: 90, homeCurrency: 'INR', paidInHome: 2700, savedInHome: 5400, secondhand: true },
+      // New Flipkart item: ₹1,299 MRP, paid ₹649 → ₹650 saved.
+      { ...base, id: '2', itemId: 'flipkart:IN:2', platform: 'Flipkart', currency: 'INR', pricePaid: 649, originalPrice: 1299, homeCurrency: 'INR', paidInHome: 649, savedInHome: 650, secondhand: false },
+      // Logged while the user's currency was euros: converted at today's rate.
+      { ...base, id: '3', itemId: 'ebay:DE:3', platform: 'eBay', currency: 'EUR', pricePaid: 20, originalPrice: 30, homeCurrency: 'EUR', paidInHome: 20, savedInHome: 10, secondhand: true },
+      // No list price: nothing saved to count.
+      { ...base, id: '4', itemId: 'flipkart:IN:4', platform: 'Flipkart', currency: 'INR', pricePaid: 500, originalPrice: null, homeCurrency: 'INR', paidInHome: 500, savedInHome: null, secondhand: false },
     ];
-    expect(computeSustainability(purchases)).toEqual({
-      totalCO2Saved: 21,
-      itemsThrifted: 3,
-      waterSavedLiters: 3780,
-      moneySavedInr: 6050,
-      treesEquivalent: 1,
+    expect(computeSustainability(purchases, 'INR', { EUR: 1, INR: 98.4 })).toEqual({
+      purchases: 4,
+      itemsThrifted: 2,
+      moneySaved: 5400 + 650 + 984,
+      currency: 'INR',
     });
+    // Without a rate the euro purchase can't be converted and is left out (never guessed).
+    expect(computeSustainability(purchases, 'INR', null).moneySaved).toBe(6050);
   });
 });

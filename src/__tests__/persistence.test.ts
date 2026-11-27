@@ -1,5 +1,7 @@
 import {
   createDefaultPersistedState,
+  createDefaultProfile,
+  migrateListingId,
   migratePersistedState,
   sanitizePersistedState,
   sanitizePriceAlerts,
@@ -10,6 +12,14 @@ import {
 } from '../store/persistence';
 
 const NOW = new Date(2026, 10, 25, 10, 0);
+
+describe('defaults', () => {
+  it('guesses the currency from the device locale but leaves the country to the user', () => {
+    expect(createDefaultProfile(NOW, 'en-IN')).toMatchObject({ country: null, currency: 'INR', shopFor: null, profilerVersion: 0 });
+    expect(createDefaultProfile(NOW, 'de-DE').currency).toBe('EUR');
+    expect(createDefaultProfile(NOW, 'xx').currency).toBe('INR');
+  });
+});
 
 describe('sanitizePersistedState', () => {
   it.each([undefined, null, 42, 'text', [], true])('returns {} for unusable input %p', (input) => {
@@ -33,42 +43,71 @@ describe('field sanitizers', () => {
     const profile = sanitizeProfile(
       {
         name: '   ',
-        personalityTraits: ['introvert', 7, 'nope', 'introvert'],
+        country: 'zz',
+        currency: 'rupees',
+        shopFor: 'kids',
+        traits: { polish: 3, edge: 'x', magic: 1 },
+        likedColors: ['black', 'black', 'tartan', 'white'],
+        avoidColors: ['white', 'yellow'],
+        fit: 'baggy',
+        occasions: ['work', 'party', 'work'],
+        budgetMax: -5,
+        tasteRatings: [
+          { itemId: 'a', liked: true, archetypes: ['Bohemian', 'Fake'], colors: ['green', 'x'], category: 'Dresses' },
+          { itemId: 'a', liked: false, archetypes: [], colors: [], category: 'Dresses' },
+          { itemId: 'b', liked: 'yes', archetypes: [], colors: [], category: 'Tops' },
+          { itemId: 'c', liked: true, archetypes: [], colors: [], category: 'Hats' },
+        ],
         styleScores: { Y2K: 140, Grunge: -3, Fake: 50, Minimalist: 'x' },
+        styleReasons: [{ archetype: 'Y2K', text: 'Because' }, { archetype: 'Nope', text: 'x' }, { archetype: 'Y2K', text: '' }],
         totalXP: -10,
         points: 'lots',
         earnedBadges: { 'badge-001': '2026-01-01', 'badge-999': '2026-01-01', 'badge-002': 'yesterday' },
-        wishlist: ['flipkart:SHTFX123', 'item-404', 'flipkart:SHTFX123', null, 'ebay:v1|1|0', 'amazon:B0X', 'ebay:has space'],
+        wishlist: ['flipkart:IN:SHTFX123', 'item-404', 'flipkart:IN:SHTFX123', null, 'ebay:US:v1|1|0', 'flipkart:SHTFX123', 'ebay:GB:has space'],
         completedQuests: ['quest-001', 'quest-x'],
-        budgetTier: 'budget-huge',
         sustainabilityPriority: 900,
         joinedDate: 'Feb 1',
       },
       NOW,
     );
-    expect(profile.name).toBe('VibeVault User');
-    expect(profile.personalityTraits).toEqual(['introvert']);
-    expect(profile.styleScores).toEqual({ Y2K: 100 });
-    expect(profile.totalXP).toBe(0);
-    expect(profile.points).toBe(0);
-    expect(profile.earnedBadges).toEqual({ 'badge-001': '2026-01-01' });
-    // Old sample ids and unknown sources are dropped; live listing ids are kept once.
-    expect(profile.wishlist).toEqual(['flipkart:SHTFX123', 'ebay:v1|1|0']);
-    expect(profile.completedQuests).toEqual(['quest-001']);
-    expect(profile.budgetTier).toBeNull();
-    expect(profile.sustainabilityPriority).toBe(100);
-    expect(profile.joinedDate).toBe('2026-11-25');
+    expect(profile).toMatchObject({
+      name: 'VibeVault User',
+      country: null,
+      shopFor: null,
+      traits: { polish: 1 },
+      likedColors: ['black', 'white'],
+      // Loved colours can't also be avoided.
+      avoidColors: ['yellow'],
+      fit: null,
+      occasions: ['work'],
+      budgetMax: null,
+      styleScores: { Y2K: 100 },
+      styleReasons: [{ archetype: 'Y2K', text: 'Because' }],
+      totalXP: 0,
+      points: 0,
+      earnedBadges: { 'badge-001': '2026-01-01' },
+      // Old-format and sample ids are dropped; listing ids with a market are kept once.
+      wishlist: ['flipkart:IN:SHTFX123', 'ebay:US:v1|1|0'],
+      completedQuests: ['quest-001'],
+      sustainabilityPriority: 100,
+      joinedDate: '2026-11-25',
+    });
+    expect(profile.tasteRatings).toEqual([{ itemId: 'a', liked: true, archetypes: ['Bohemian'], colors: ['green'], category: 'Dresses' }]);
+    expect(profile.currency).toMatch(/^[A-Z]{3}$/);
+  });
+
+  it('takes the country’s currency when the stored currency is unusable', () => {
+    expect(sanitizeProfile({ country: 'gb', currency: 12 }, NOW)).toMatchObject({ country: 'GB', currency: 'GBP' });
   });
 
   it('drops invalid alerts, old sample items and duplicates', () => {
     const alerts = sanitizePriceAlerts([
-      { id: 'a', itemId: 'flipkart:A1', currency: 'INR', targetPrice: 10, priceAtCreation: 20, createdAt: '2026-01-01T00:00:00Z', status: 'active' },
-      { id: 'a', itemId: 'flipkart:A2', currency: 'INR', targetPrice: 10 },
-      { id: 'b', itemId: 'item-404', currency: 'USD', targetPrice: 10 }, // old sample listing
-      { id: 'c', itemId: 'flipkart:A2', currency: 'INR', targetPrice: 0 },
-      { id: 'e', itemId: 'ebay:v1|2|0', targetPrice: 10 }, // no currency (pre-v3)
-      { id: 'f', itemId: 'ebay:v1|2|0', currency: 'usd', targetPrice: 10 },
-      { id: 'd', itemId: 'ebay:v1|3|0', currency: 'USD', targetPrice: 12, status: 'triggered', triggeredAt: 'garbage' },
+      { id: 'a', itemId: 'flipkart:IN:A1', currency: 'INR', targetPrice: 10, priceAtCreation: 20, createdAt: '2026-01-01T00:00:00Z', status: 'active' },
+      { id: 'a', itemId: 'flipkart:IN:A2', currency: 'INR', targetPrice: 10 },
+      { id: 'b', itemId: 'item-404', currency: 'USD', targetPrice: 10 },
+      { id: 'c', itemId: 'flipkart:IN:A2', currency: 'INR', targetPrice: 0 },
+      { id: 'e', itemId: 'ebay:IN:v1|2|0', targetPrice: 10 },
+      { id: 'd', itemId: 'ebay:IN:v1|3|0', currency: 'USD', targetPrice: 12, status: 'triggered', triggeredAt: 'garbage' },
       'junk',
     ]);
     expect(alerts.map((a) => a.id)).toEqual(['a', 'd']);
@@ -92,26 +131,25 @@ describe('field sanitizers', () => {
   it('gives timed quests a deadline when stored data lacks one', () => {
     const startedAt = '2026-11-20T10:00:00.000Z';
     const progress = sanitizeQuestProgress({
-      'quest-002': { status: 'in-progress', completedSteps: 1, startedAt }, // 7-day quest
-      'quest-003': { status: 'in-progress', completedSteps: 1, startedAt }, // untimed
+      'quest-002': { status: 'in-progress', completedSteps: 1, startedAt },
+      'quest-003': { status: 'in-progress', completedSteps: 1, startedAt },
     });
     expect(progress['quest-002'].deadline).toBe('2026-11-27T10:00:00.000Z');
     expect(progress['quest-003'].deadline).toBeUndefined();
   });
 
-  it('keeps one purchase per item and validates platforms and currencies', () => {
+  it('keeps one purchase per item and validates ids and currencies', () => {
     const purchases = sanitizePurchases([
-      { itemId: 'ebay:v1|1|0', pricePaid: 20, platform: 'eBay', currency: 'USD', originalPrice: 80, inrRate: 92.24, co2Saved: 5 },
-      { itemId: 'ebay:v1|1|0', pricePaid: 25, platform: 'eBay', currency: 'USD' },
-      { itemId: 'flipkart:A1', pricePaid: 649, platform: 'Flipkart', currency: 'INR', originalPrice: 0 },
-      { itemId: 'item-002', pricePaid: 20, platform: 'Depop', currency: 'USD' }, // old sample listing
-      { itemId: 'ebay:v1|3|0', pricePaid: -1, platform: 'eBay', currency: 'USD' },
-      { itemId: 'ebay:v1|4|0', pricePaid: 10, platform: 'Vinted', currency: 'USD' },
-      { itemId: 'ebay:v1|5|0', pricePaid: 10, platform: 'eBay' },
+      { itemId: 'ebay:IN:v1|1|0', pricePaid: 20, platform: 'eBay', currency: 'USD', originalPrice: 80, homeCurrency: 'INR', paidInHome: 1856, savedInHome: 5568, secondhand: true },
+      { itemId: 'ebay:IN:v1|1|0', pricePaid: 25, platform: 'eBay', currency: 'USD' },
+      { itemId: 'flipkart:IN:A1', pricePaid: 649, platform: 'Flipkart', currency: 'INR', originalPrice: 0 },
+      { itemId: 'item-002', pricePaid: 20, platform: 'Depop', currency: 'USD' },
+      { itemId: 'ebay:IN:v1|3|0', pricePaid: -1, platform: 'eBay', currency: 'USD' },
+      { itemId: 'ebay:IN:v1|5|0', pricePaid: 10, platform: 'eBay' },
     ]);
-    expect(purchases.map((p) => p.itemId)).toEqual(['ebay:v1|1|0', 'flipkart:A1']);
-    expect(purchases[0]).toMatchObject({ pricePaid: 20, currency: 'USD', originalPrice: 80, inrRate: 92.24, secondhand: true, co2Saved: 5 });
-    expect(purchases[1]).toMatchObject({ currency: 'INR', originalPrice: null, inrRate: 1, secondhand: false, co2Saved: 0 });
+    expect(purchases.map((p) => p.itemId)).toEqual(['ebay:IN:v1|1|0', 'flipkart:IN:A1']);
+    expect(purchases[0]).toMatchObject({ homeCurrency: 'INR', paidInHome: 1856, savedInHome: 5568, secondhand: true });
+    expect(purchases[1]).toMatchObject({ originalPrice: null, homeCurrency: 'INR', paidInHome: 649, savedInHome: null, secondhand: false });
   });
 
   it('cleans streaks', () => {
@@ -123,8 +161,46 @@ describe('field sanitizers', () => {
 describe('migratePersistedState', () => {
   it('leaves current-version data alone', () => {
     const state = createDefaultPersistedState(NOW);
-    expect(migratePersistedState(state, 2)).toBe(state);
-    expect(migratePersistedState(state, 3)).toBe(state);
+    expect(migratePersistedState(state, 4)).toBe(state);
+  });
+
+  it('adds the market to v3 listing ids', () => {
+    expect(migrateListingId('flipkart:SHTFX123')).toBe('flipkart:IN:SHTFX123');
+    expect(migrateListingId('ebay:v1|1|0')).toBe('ebay:IN:v1|1|0');
+    expect(migrateListingId('ebay:IN:v1|1|0')).toBe('ebay:IN:v1|1|0');
+    expect(migrateListingId(5)).toBe(5);
+  });
+
+  it('moves a v3 (India-only) install to global listings, keeping its data', () => {
+    const v3 = {
+      profile: {
+        ...createDefaultProfile(NOW),
+        styleArchetypes: ['Minimalist'],
+        styleScores: { Minimalist: 100 },
+        budgetTier: 'budget-mid',
+        wishlist: ['flipkart:SHTFX123', 'ebay:v1|1|0'],
+      },
+      isProfileComplete: true,
+      vibeSummary: 'Your vibe: clean lines.',
+      priceAlerts: [{ id: 'a', itemId: 'flipkart:SHTFX123', currency: 'INR', targetPrice: 500, status: 'active' }],
+      purchases: [
+        { id: 'p', itemId: 'ebay:v1|9|0', title: 'Jacket', platform: 'eBay', currency: 'USD', pricePaid: 30, originalPrice: 90, inrRate: 90, secondhand: true, co2Saved: 12 },
+      ],
+      questProgress: {},
+      streak: { lastActiveDate: null, current: 0, longest: 0 },
+    };
+    const migrated = sanitizePersistedState(migratePersistedState(v3, 3), NOW);
+    expect(migrated.isProfileComplete).toBe(true);
+    expect(migrated.profile).toMatchObject({
+      country: 'IN',
+      currency: 'INR',
+      budgetMax: 1500,
+      profilerVersion: 1,
+      styleScores: { Minimalist: 100 },
+      wishlist: ['flipkart:IN:SHTFX123', 'ebay:IN:v1|1|0'],
+    });
+    expect(migrated.priceAlerts?.[0].itemId).toBe('flipkart:IN:SHTFX123');
+    expect(migrated.purchases?.[0]).toMatchObject({ itemId: 'ebay:IN:v1|9|0', homeCurrency: 'INR', paidInHome: 2700, savedInHome: 5400, secondhand: true });
   });
 
   it('handles empty or odd legacy data without throwing', () => {

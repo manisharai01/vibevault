@@ -1,176 +1,26 @@
 // ============================================================
-// VibeVault – Price analysis (Objective 2)
+// VibeVault – Price analysis (Objective 2: when to buy)
 //
-// Works only on prices actually recorded from the marketplaces
-// (one per day, by the backend). Forecasts use a damped linear trend
-// fitted to the recorded history and are shown only once enough
-// history exists; nothing is simulated.
+// Everything here works on prices actually recorded from the
+// marketplaces and on the backend model's published predictions,
+// which are learnt from what really happened to tracked prices and
+// scored afterwards (see supabase/migrations). Nothing is simulated.
 // ============================================================
 
-import { FashionItem, PriceAlert, PricePoint } from '../types';
-import { addDays, dayNumber, parseDateKey, toDateKey } from '../utils/date';
+import { FashionItem, HorizonPrediction, PredictionHorizon, PriceAlert, PricePoint, Verdict } from '../types';
+import { parseDateKey } from '../utils/date';
+import { percentOff } from '../utils/format';
 
-/** Minimum recorded days before any forecast is shown. */
-export const MIN_HISTORY_POINTS = 7;
-const MIN_HISTORY_SPAN_DAYS = 6;
-const REGRESSION_WINDOW_DAYS = 21;
-/** Days over which a detected trend fades out (damped-trend forecasting). */
-const TREND_DAMPING_DAYS = 10;
-
-interface Sample {
-  x: number; // day number
-  y: number; // price
-}
-
-const round2 = (v: number) => Math.round(v * 100) / 100;
-
-function samples(history: PricePoint[]): Sample[] {
-  const points: Sample[] = [];
-  for (const p of history) {
-    const date = parseDateKey(p.date);
-    if (date && Number.isFinite(p.price) && p.price > 0) points.push({ x: dayNumber(date), y: p.price });
-  }
-  return points.sort((a, b) => a.x - b.x);
-}
-
-interface Fit {
-  slope: number;
-  intercept: number;
-  residualStd: number;
-  n: number;
-  lastX: number;
-  lastY: number;
-}
-
-function fit(history: PricePoint[]): Fit | null {
-  const all = samples(history);
-  if (all.length < MIN_HISTORY_POINTS) return null;
-  const lastX = all[all.length - 1].x;
-  if (lastX - all[0].x < MIN_HISTORY_SPAN_DAYS) return null;
-  const pts = all.filter((p) => p.x > lastX - REGRESSION_WINDOW_DAYS);
-  const n = pts.length;
-  if (n < MIN_HISTORY_POINTS) return null;
-  const xMean = pts.reduce((s, p) => s + p.x, 0) / n;
-  const yMean = pts.reduce((s, p) => s + p.y, 0) / n;
-  let sxy = 0;
-  let sxx = 0;
-  for (const p of pts) {
-    sxy += (p.x - xMean) * (p.y - yMean);
-    sxx += (p.x - xMean) ** 2;
-  }
-  const slope = sxx === 0 ? 0 : sxy / sxx;
-  const intercept = yMean - slope * xMean;
-  const sse = pts.reduce((s, p) => s + (p.y - (intercept + slope * p.x)) ** 2, 0);
-  return {
-    slope,
-    intercept,
-    residualStd: n > 2 ? Math.sqrt(sse / (n - 2)) : 0,
-    n,
-    lastX,
-    lastY: all[all.length - 1].y,
-  };
-}
+/** The horizon the app's headline advice is based on. */
+export const MAIN_HORIZON: PredictionHorizon = 14;
+/** A "drop" in the model is at least this much below today's price. */
+export const DROP_THRESHOLD = 0.05;
+/** Days of history needed before the app compares today's price with the item's own history. */
+export const MIN_HISTORY_DAYS = 7;
 
 /** Number of distinct recorded days. */
 export function historyDays(history: PricePoint[]): number {
-  return samples(history).length;
-}
-
-export function hasForecast(history: PricePoint[]): boolean {
-  return fit(history) !== null;
-}
-
-/**
- * Forecast `daysAhead` days after the latest recorded price, or null when
- * there isn't enough recorded history yet.
- */
-export function predictFromHistory(history: PricePoint[], daysAhead: number): number | null {
-  const f = fit(history);
-  if (!f) return null;
-  if (daysAhead <= 0) return f.lastY;
-  const dampedDays = TREND_DAMPING_DAYS * (1 - Math.exp(-daysAhead / TREND_DAMPING_DAYS));
-  const predicted = f.lastY + f.slope * dampedDays;
-  return round2(Math.max(f.lastY * 0.5, Math.min(f.lastY * 1.25, predicted)));
-}
-
-/** Daily forecast for the `days` days after the latest recorded price (empty without enough history). */
-export function generateForecast(item: Pick<FashionItem, 'priceHistory'>, days: number = 30): PricePoint[] {
-  const last = item.priceHistory[item.priceHistory.length - 1];
-  const start = last ? parseDateKey(last.date) : null;
-  if (!start || !hasForecast(item.priceHistory)) return [];
-  const out: PricePoint[] = [];
-  for (let d = 1; d <= days; d++) {
-    const price = predictFromHistory(item.priceHistory, d);
-    if (price !== null) out.push({ date: toDateKey(addDays(start, d)), price });
-  }
-  return out;
-}
-
-/** ~95% range from the scatter of recorded prices around the trend; widens with the horizon. */
-export function getPredictionRange(
-  item: Pick<FashionItem, 'priceHistory'>,
-  daysAhead: number,
-): { predicted: number; low: number; high: number } | null {
-  const f = fit(item.priceHistory);
-  const predicted = predictFromHistory(item.priceHistory, daysAhead);
-  if (!f || predicted === null) return null;
-  const spread = Math.max(1.96 * f.residualStd * Math.sqrt(1 + daysAhead / f.n), predicted * 0.01);
-  return { predicted, low: round2(Math.max(0, predicted - spread)), high: round2(predicted + spread) };
-}
-
-export interface PurchaseWindow {
-  hasForecast: boolean;
-  bestDay: number;
-  bestPrice: number;
-  savings: number;
-  savingsPercent: number;
-  recommendation: string;
-}
-
-/** Share of the maximum predicted saving worth waiting for (earlier is better). */
-const NEAR_BEST_SAVINGS = 0.85;
-
-/** Earliest day in the next 30 that captures most of the predicted saving (0 = buy now). */
-export function getOptimalPurchaseWindow(item: Pick<FashionItem, 'priceHistory' | 'currentPrice'>): PurchaseWindow {
-  const days = historyDays(item.priceHistory);
-  if (!hasForecast(item.priceHistory)) {
-    const remaining = Math.max(1, MIN_HISTORY_POINTS - days);
-    return {
-      hasForecast: false,
-      bestDay: 0,
-      bestPrice: item.currentPrice,
-      savings: 0,
-      savingsPercent: 0,
-      recommendation: `📊 Tracking this price — a forecast appears after ${remaining} more day${remaining === 1 ? '' : 's'} of data.`,
-    };
-  }
-
-  const predictions = Array.from({ length: 30 }, (_, i) => predictFromHistory(item.priceHistory, i + 1) ?? item.currentPrice);
-  const lowest = Math.min(item.currentPrice, ...predictions);
-  const maxSaving = item.currentPrice - lowest;
-  const buyNow: PurchaseWindow = {
-    hasForecast: true,
-    bestDay: 0,
-    bestPrice: item.currentPrice,
-    savings: 0,
-    savingsPercent: 0,
-    recommendation: '🟢 Buy now — the recorded trend doesn’t point to a lower price in the next 30 days.',
-  };
-  if (!(maxSaving > 0.005)) return buyNow;
-
-  const target = item.currentPrice - maxSaving * NEAR_BEST_SAVINGS;
-  const index = predictions.findIndex((p) => p <= target + 1e-9);
-  const bestDay = index + 1;
-  const bestPrice = predictions[index];
-  const savings = round2(item.currentPrice - bestPrice);
-  const savingsPercent = item.currentPrice > 0 ? Math.round((savings / item.currentPrice) * 100) : 0;
-  if (savingsPercent < 1) return buyNow;
-
-  const recommendation =
-    bestDay <= 7
-      ? `⏳ Prices have been falling — waiting ~${bestDay} day${bestDay > 1 ? 's' : ''} could save about ${savingsPercent}%.`
-      : `📈 Downward trend — about ${savingsPercent}% lower is possible in ~${bestDay} days. Set an alert to catch it.`;
-  return { hasForecast: true, bestDay, bestPrice, savings, savingsPercent, recommendation };
+  return new Set(history.filter((p) => p.price > 0 && parseDateKey(p.date)).map((p) => p.date)).size;
 }
 
 /** Price change since tracking started (from recorded history). */
@@ -180,6 +30,126 @@ export function priceChangeSinceFirst(history: PricePoint[]): { percent: number;
   const first = pts[0];
   const last = pts[pts.length - 1];
   return { percent: Math.round(((last.price - first.price) / first.price) * 100), since: first.date };
+}
+
+export function predictionFor(
+  item: Pick<FashionItem, 'prediction'>,
+  horizon: PredictionHorizon = MAIN_HORIZON,
+): HorizonPrediction | null {
+  return item.prediction?.horizons[horizon] ?? null;
+}
+
+export interface BuyAdvice {
+  verdict: Verdict;
+  horizon: PredictionHorizon;
+  /** Chance of a 5%+ lower price within the horizon (while still for sale). */
+  pDrop: number;
+  /** Chance it sells out or is removed before getting cheaper. */
+  pGone: number;
+  /** Typical lowest price over the horizon. */
+  expectedLow: number;
+  /** Expected saving from waiting (current − typical low), never negative. */
+  saving: number;
+  headline: string;
+  detail: string;
+}
+
+const pct = (p: number) => `${Math.round(p * 100)}%`;
+
+/** Headline "buy now / wait" advice from the model, or null while it is still learning. */
+export function getBuyAdvice(item: Pick<FashionItem, 'prediction' | 'currentPrice' | 'secondhand'>): BuyAdvice | null {
+  const p = predictionFor(item);
+  if (!p) return null;
+  const saving = Math.max(0, Math.round((item.currentPrice - p.expectedLow) * 100) / 100);
+  const days = MAIN_HORIZON;
+  const sellsOut = item.secondhand && p.pGone >= 0.25 ? ` It's a one-off — ${pct(p.pGone)} of similar listings sold before getting cheaper.` : '';
+  switch (p.verdict) {
+    case 'buy':
+      return {
+        verdict: 'buy',
+        horizon: days,
+        pDrop: p.pDrop,
+        pGone: p.pGone,
+        expectedLow: p.expectedLow,
+        saving,
+        headline: 'Buy now',
+        detail: `Only ${pct(p.pDrop)} chance of a 5%+ lower price in the next ${days} days.${sellsOut}`,
+      };
+    case 'wait':
+      return {
+        verdict: 'wait',
+        horizon: days,
+        pDrop: p.pDrop,
+        pGone: p.pGone,
+        expectedLow: p.expectedLow,
+        saving,
+        headline: 'Wait',
+        detail: `${pct(p.pDrop)} chance it gets at least 5% cheaper within ${days} days.${sellsOut}`,
+      };
+    default:
+      return {
+        verdict: 'unclear',
+        horizon: days,
+        pDrop: p.pDrop,
+        pGone: p.pGone,
+        expectedLow: p.expectedLow,
+        saving,
+        headline: 'Too close to call',
+        detail: `${pct(p.pDrop)} chance of a 5%+ drop within ${days} days — set a price alert instead of guessing.${sellsOut}`,
+      };
+  }
+}
+
+/** Where today's price sits in the item's recorded range: 0 = lowest ever, 1 = highest. */
+export function pricePosition(item: Pick<FashionItem, 'stats' | 'currentPrice'>): number | null {
+  const s = item.stats;
+  if (!s || s.days < MIN_HISTORY_DAYS || s.highest <= s.lowest) return null;
+  return Math.max(0, Math.min(1, (item.currentPrice - s.lowest) / (s.highest - s.lowest)));
+}
+
+/** True when today's price is the lowest VibeVault has recorded for the listing (with enough history). */
+export function isAtRecordLow(item: Pick<FashionItem, 'stats' | 'currentPrice'>): boolean {
+  const s = item.stats;
+  return !!s && s.days >= MIN_HISTORY_DAYS && item.currentPrice <= s.lowest + 0.005;
+}
+
+export interface SeasonalInsight {
+  /** 0 = January. */
+  month: number;
+  /** How much lower that month's prices were than the item's typical price (0.18 = 18%). */
+  below: number;
+  years: number;
+}
+
+const median = (values: number[]) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+
+/**
+ * The calendar month when this item has been cheapest, from at least ~11 months of recorded or
+ * archived history; null when there isn't enough history or no month stands out (≥ 5% below).
+ */
+export function seasonalInsight(history: PricePoint[]): SeasonalInsight | null {
+  const pts = history.filter((p) => p.price > 0 && parseDateKey(p.date));
+  if (pts.length < 200) return null;
+  const spanDays = (Date.parse(pts[pts.length - 1].date) - Date.parse(pts[0].date)) / 86_400_000;
+  if (spanDays < 330) return null;
+  const typical = median(pts.map((p) => p.price));
+  const byMonth = new Map<number, number[]>();
+  for (const p of pts) {
+    const month = Number(p.date.slice(5, 7)) - 1;
+    byMonth.set(month, [...(byMonth.get(month) ?? []), p.price]);
+  }
+  let best: { month: number; below: number } | null = null;
+  for (const [month, prices] of byMonth) {
+    if (prices.length < 10) continue;
+    const below = 1 - median(prices) / typical;
+    if (!best || below > best.below) best = { month, below };
+  }
+  if (!best || best.below < DROP_THRESHOLD) return null;
+  return { ...best, below: Math.round(best.below * 100) / 100, years: Math.max(1, Math.round(spanDays / 365)) };
 }
 
 /** Active alerts whose item is available at or below the target price. */
@@ -195,44 +165,26 @@ export function checkAlerts(
   });
 }
 
-/** Deal score (0–100): discount vs retail, expected drop, sustainability and condition. */
-export function getDealScore(
-  item: Pick<FashionItem, 'currentPrice' | 'originalPrice' | 'predictedPrice7d' | 'sustainabilityScore' | 'condition'>,
-): number {
-  const discount =
-    item.originalPrice !== null && item.originalPrice > 0 ? Math.max(0, 1 - item.currentPrice / item.originalPrice) : 0;
-  const expectedDrop =
-    item.predictedPrice7d !== null && item.currentPrice > 0
-      ? Math.max(0, (item.currentPrice - item.predictedPrice7d) / item.currentPrice)
-      : 0;
-  const sustainBonus = (Math.max(0, Math.min(100, item.sustainabilityScore)) / 100) * 15;
-  const conditionBonus =
-    item.condition === 'New with tags' ? 15 : item.condition === 'Like new' ? 12 : item.condition === 'Good' ? 8 : item.condition === 'Fair' ? 4 : 2;
-  return Math.max(0, Math.min(100, Math.round(discount * 40 + expectedDrop * 30 + sustainBonus + conditionBonus)));
+/**
+ * Deal score (0–100): how good buying now is, from real data only —
+ *   • where today's price sits in the item's own recorded history (up to 40),
+ *   • the discount against the marketplace's list price / MRP (up to 30),
+ *   • the model's advice (buy now 30, too close to call 15, wait 0; 15 while it's learning).
+ */
+export function getDealScore(item: Pick<FashionItem, 'currentPrice' | 'originalPrice' | 'stats' | 'prediction' | 'secondhand'>): number {
+  const position = pricePosition(item);
+  const history = position === null ? 15 : (1 - position) * 40;
+  const discount = Math.min(30, percentOff(item.currentPrice, item.originalPrice) * 0.5);
+  const advice = getBuyAdvice(item);
+  const model = !advice ? 15 : advice.verdict === 'buy' ? 30 : advice.verdict === 'unclear' ? 15 : 0;
+  return Math.max(0, Math.min(100, Math.round(history + discount + model)));
 }
 
-/**
- * Backtest on recorded prices: forecast each item's price `horizon` days
- * before its latest record and compare with what was actually recorded.
- * Returns accuracy (100 − mean absolute % error), or null without enough history.
- */
-export function backtestAccuracy(items: Pick<FashionItem, 'priceHistory'>[], horizon: number = 7): number | null {
-  const errors: number[] = [];
-  for (const item of items) {
-    const pts = samples(item.priceHistory);
-    if (pts.length === 0) continue;
-    const lastX = pts[pts.length - 1].x;
-    const past = item.priceHistory.filter((p) => {
-      const d = parseDateKey(p.date);
-      return d !== null && dayNumber(d) <= lastX - horizon;
-    });
-    const pastPts = samples(past);
-    if (pastPts.length === 0) continue;
-    const predicted = predictFromHistory(past, lastX - pastPts[pastPts.length - 1].x);
-    const actual = pts[pts.length - 1].y;
-    if (predicted !== null && actual > 0) errors.push(Math.abs(predicted - actual) / actual);
-  }
-  if (errors.length < 3) return null;
-  const mape = errors.reduce((sum, e) => sum + e, 0) / errors.length;
-  return Math.max(0, Math.round((1 - mape) * 100));
+/** Suggested alert target: the model's typical low if waiting, else 10% below today's price. */
+export function suggestedTarget(item: Pick<FashionItem, 'currentPrice' | 'prediction' | 'currency'>): number {
+  const p = predictionFor(item);
+  const raw = p && p.expectedLow < item.currentPrice ? p.expectedLow : item.currentPrice * 0.9;
+  const decimals = ['JPY', 'KRW', 'INR', 'CLP', 'VND', 'IDR', 'HUF', 'COP', 'TWD'].includes(item.currency) ? 0 : 2;
+  const factor = 10 ** decimals;
+  return Math.max(1 / factor, Math.floor(raw * factor) / factor);
 }

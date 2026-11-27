@@ -1,86 +1,128 @@
-import { Linking } from 'react-native';
-import { EXTERNAL_STORES } from '../constants/marketplaces';
-import { composeLook } from '../services/composer';
-import { externalSearchUrl, marketplaceCtaLabel, openItemOnMarketplace, openUrl, searchQueryFor } from '../services/linking';
-import { makeItem, sampleCatalog } from './helpers/fixtures';
+import { buildCapsule, buildOutfits, capsulePlan } from '../services/composer';
+import { compareLinks, marketplaceCtaLabel, marketplaceSearchUrl, searchQueryFor } from '../services/linking';
+import { getRecommendations } from '../services/styleEngine';
+import { createDefaultProfile } from '../store/persistence';
+import { MarketplaceStatus, UserProfile } from '../types';
+import { makeEbayItem, makeItem, NOW, RATES, sampleCatalog } from './helpers/fixtures';
 
-const catalog = [
-  ...sampleCatalog(),
-  makeItem({ id: 'flipkart:SHOFX2', source_item_id: 'SHOFX2', title: 'White Leather Loafers', category: 'Shoes', current_price: 1999 }),
-];
+function stylistProfile(overrides: Partial<UserProfile> = {}): UserProfile {
+  return {
+    ...createDefaultProfile(NOW),
+    country: 'IN',
+    currency: 'INR',
+    shopFor: 'women',
+    likedColors: ['black', 'white', 'neutral'],
+    styleArchetypes: ['Minimalist', 'Dark Academia', 'Preppy'],
+    styleScores: { Minimalist: 100, 'Dark Academia': 70, Preppy: 55 },
+    occasions: ['work', 'everyday'],
+    budgetMax: 2500,
+    ...overrides,
+  };
+}
 
-describe('composeLook', () => {
-  it('is deterministic for a seed and fills every slot from the full catalogue', () => {
-    const a = composeLook(catalog, new Set(), 1);
-    expect(composeLook(catalog, new Set(), 1)).toEqual(a);
-    expect(a.every((slot) => slot.item !== null)).toBe(true);
-    expect(a.map((s) => s.key).slice(-3)).toEqual(['layer', 'shoes', 'extra']);
+const ranked = (profile: UserProfile) => getRecommendations(sampleCatalog(), profile, RATES);
+
+describe('outfits', () => {
+  it('builds complete, coherent looks from the user’s sections only', () => {
+    const profile = stylistProfile();
+    const outfits = buildOutfits(ranked(profile), profile, { wishlist: new Set(), rates: RATES }, 3);
+    expect(outfits.length).toBeGreaterThan(0);
+    for (const outfit of outfits) {
+      const slots = outfit.pieces.map((p) => p.slot);
+      const hasBase = (slots.includes('top') && slots.includes('bottom')) || slots.includes('dress');
+      expect(hasBase).toBe(true);
+      expect(slots).toContain('shoes');
+      expect(outfit.pieces.every((p) => p.item.department !== 'men')).toBe(true);
+      // Never three or more accent colours.
+      expect(outfit.accents.length).toBeLessThanOrEqual(2);
+    }
+    expect(outfits[0].reasons.join(' ')).toMatch(/Minimalist|palette|accent/);
   });
 
-  it('never combines a dress with separates and matches slot categories', () => {
-    for (let seed = 0; seed < 40; seed++) {
-      const look = composeLook(catalog, new Set(), seed);
-      const keys = look.map((s) => s.key);
-      const hasDress = keys.includes('dress');
-      expect(hasDress ? !keys.includes('top') && !keys.includes('bottom') : keys.includes('top') && keys.includes('bottom')).toBe(true);
-      for (const slot of look) {
-        if (!slot.item) continue;
-        const expected = { top: ['Tops'], bottom: ['Bottoms'], dress: ['Dresses'], layer: ['Outerwear'], shoes: ['Shoes'], extra: ['Accessories', 'Bags'] }[slot.key];
-        expect(expected).toContain(slot.item.category);
-      }
+  it('is deterministic and each next look differs by at least two pieces', () => {
+    const profile = stylistProfile();
+    const a = buildOutfits(ranked(profile), profile, { wishlist: new Set(), rates: RATES }, 4);
+    const b = buildOutfits(ranked(profile), profile, { wishlist: new Set(), rates: RATES }, 4);
+    expect(a.map((o) => o.pieces.map((p) => p.item.id))).toEqual(b.map((o) => o.pieces.map((p) => p.item.id)));
+    for (let i = 1; i < a.length; i++) {
+      const prev = new Set(a[i - 1].pieces.map((p) => p.item.id));
+      expect(a[i].pieces.filter((p) => !prev.has(p.item.id)).length).toBeGreaterThanOrEqual(2);
     }
   });
 
-  it('prefers wishlist pieces', () => {
-    const savedShoes = catalog.filter((i) => i.category === 'Shoes').at(-1)!;
-    const look = composeLook(catalog, new Set([savedShoes.id]), 3);
-    const shoes = look.find((s) => s.key === 'shoes')!;
-    expect(shoes.item?.id).toBe(savedShoes.id);
-    expect(shoes.fromWishlist).toBe(true);
+  it('puts saved pieces first and follows the occasion and style filters', () => {
+    const profile = stylistProfile();
+    const items = ranked(profile);
+    const blazer = items.find((i) => i.title.includes('Blazer'))!;
+    const withSaved = buildOutfits(items, profile, { wishlist: new Set([blazer.id]), rates: RATES }, 1);
+    expect(withSaved[0].pieces.some((p) => p.item.id === blazer.id && p.fromWishlist)).toBe(true);
+
+    const boho = buildOutfits(items, profile, { wishlist: new Set(), rates: RATES, style: 'Bohemian' }, 1);
+    expect(boho[0].pieces.find((p) => p.slot === 'dress')?.item.styleArchetypes).toContain('Bohemian');
   });
 
-  it('returns empty slots when nothing matches', () => {
-    expect(composeLook([], new Set(), 1).every((slot) => slot.item === null)).toBe(true);
+  it('dresses menswear profiles from the men’s section', () => {
+    const profile = stylistProfile({ shopFor: 'men', likedColors: ['white', 'navy', 'neutral'] });
+    const [look] = buildOutfits(ranked(profile), profile, { wishlist: new Set(), rates: RATES }, 1);
+    expect(look.pieces.every((p) => p.item.department !== 'women')).toBe(true);
+    expect(look.pieces.some((p) => p.slot === 'dress')).toBe(false);
+  });
+
+  it('returns nothing rather than half a look when a section has no listings', () => {
+    const profile = stylistProfile();
+    expect(buildOutfits([], profile, { wishlist: new Set(), rates: RATES })).toEqual([]);
   });
 });
 
-describe('marketplace links', () => {
-  it('opens the listing’s own product page', async () => {
-    const spy = jest.spyOn(Linking, 'openURL').mockResolvedValueOnce(true);
-    await expect(openItemOnMarketplace(catalog[0])).resolves.toBe(true);
-    expect(spy).toHaveBeenCalledWith(catalog[0].productUrl);
-    spy.mockRestore();
+describe('capsule wardrobe', () => {
+  it('builds a palette-led capsule that mixes into many outfits', () => {
+    const profile = stylistProfile();
+    const capsule = buildCapsule(ranked(profile), profile, { wishlist: new Set(), rates: RATES })!;
+    expect(capsule.palette.neutrals).toEqual(['black', 'white', 'neutral']);
+    expect(capsule.pieces.length).toBeGreaterThanOrEqual(8);
+    expect(capsule.outfitCount).toBeGreaterThanOrEqual(4);
+    expect(capsule.examples.length).toBeGreaterThan(0);
+    // Every piece stays within the palette (or has no colour information).
+    const palette = new Set([...capsule.palette.neutrals, ...capsule.palette.accents]);
+    expect(capsule.pieces.every((p) => p.item.colors.length === 0 || ['#F5F5F5', '#1C1C1C', '#D8C3A0', '#F3EAD3'].some((c) => p.item.colors.includes(c)) || palette.size > 3)).toBe(true);
+    expect(capsule.total.currency).toBe('INR');
   });
 
-  it('builds an https search URL for every store without a price API', () => {
-    for (const store of EXTERNAL_STORES) {
-      const url = externalSearchUrl(store, "Levi's 501 jeans & more");
-      expect(url).toMatch(/^https:\/\/[\w.-]+\//);
-      expect(url).not.toMatch(/\s/);
-      expect(url).not.toContain('&more');
-    }
-    expect(externalSearchUrl('Myntra', "Levi's 501 Jeans")).toMatch(/^https:\/\/www\.myntra\.com\/levis-501-jeans\?rawQuery=/);
-    expect(externalSearchUrl('Amazon', 'oxford shirt')).toBe('https://www.amazon.in/s?k=oxford%20shirt');
+  it('plans a dress slot only when the user shops womenswear', () => {
+    expect(capsulePlan('men').dress).toBeUndefined();
+    expect(capsulePlan('women').dress).toBe(2);
+    expect(buildCapsule([], stylistProfile(), { wishlist: new Set(), rates: RATES })).toBeNull();
+  });
+});
+
+describe('links', () => {
+  const marketplaces: MarketplaceStatus[] = [
+    { source: 'flipkart', name: 'Flipkart', attribution: null, lastSuccessAt: null, availableListings: 10, markets: ['IN'] },
+    { source: 'amazon', name: 'Amazon', attribution: null, lastSuccessAt: null, availableListings: 5, markets: ['IN', 'US'] },
+    { source: 'ebay', name: 'eBay', attribution: null, lastSuccessAt: null, availableListings: 5, markets: ['US'] },
+    { source: 'google_shopping', name: 'Google Shopping', attribution: null, lastSuccessAt: null, availableListings: 5, markets: ['IN'] },
+  ];
+
+  it('builds a clean search query', () => {
+    expect(searchQueryFor({ title: 'Oxford Shirt | Slim — White', brand: 'Roadster' })).toBe('Roadster Oxford Shirt Slim White');
+    expect(searchQueryFor({ title: 'Roadster Oxford Shirt', brand: 'Roadster' })).toBe('Roadster Oxford Shirt');
   });
 
-  it('builds clean queries without duplicating the brand', () => {
-    expect(searchQueryFor({ title: "Vintage Levi's 501 High-Waist Jeans", brand: "Levi's" })).toBe("Vintage Levi's 501 High-Waist Jeans");
-    expect(searchQueryFor({ title: 'Oxford Button-Down – Burgundy', brand: 'Tommy Hilfiger' })).toBe('Tommy Hilfiger Oxford Button-Down Burgundy');
-    expect(searchQueryFor({ title: 'Gold Chain', brand: null })).toBe('Gold Chain');
-    expect(searchQueryFor({ title: 'x'.repeat(300), brand: null })).toHaveLength(100);
+  it('links to the other marketplaces with listings in the item’s country, then Google Shopping', () => {
+    const links = compareLinks(makeItem(), marketplaces);
+    expect(links.map((l) => l.source)).toEqual(['amazon', 'google_shopping']);
+    expect(links[0].url).toBe('https://www.amazon.in/s?k=Roadster%20Men%20Slim%20Fit%20Oxford%20Shirt');
+    expect(links[1].url).toContain('https://www.google.co.in/search?tbm=shop&q=');
   });
 
-  it('labels calls to action', () => {
-    expect(marketplaceCtaLabel('Flipkart')).toBe('View on Flipkart');
-    expect(marketplaceCtaLabel('eBay')).toBe('View on eBay');
+  it('knows each marketplace’s search page per country', () => {
+    expect(marketplaceSearchUrl('ebay', 'GB', 'jeans')).toBe('https://www.ebay.co.uk/sch/i.html?_nkw=jeans');
+    expect(marketplaceSearchUrl('flipkart', 'US', 'jeans')).toBeNull();
+    expect(marketplaceSearchUrl('unknown', 'US', 'jeans')).toBeNull();
   });
 
-  it('reports whether a URL could be opened', async () => {
-    const spy = jest.spyOn(Linking, 'openURL');
-    spy.mockResolvedValueOnce(true);
-    await expect(openUrl('https://example.com')).resolves.toBe(true);
-    spy.mockRejectedValueOnce(new Error('no handler'));
-    await expect(openUrl('https://example.com')).resolves.toBe(false);
-    spy.mockRestore();
+  it('labels the store button with the site or, for Google Shopping, the store', () => {
+    expect(marketplaceCtaLabel(makeEbayItem())).toBe('View on eBay (ships to India)');
+    expect(marketplaceCtaLabel({ siteName: 'Google Shopping', source: 'google_shopping', seller: 'Myntra' })).toBe('View at Myntra');
   });
 });

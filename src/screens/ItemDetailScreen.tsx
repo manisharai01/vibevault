@@ -1,9 +1,10 @@
 // ============================================================
 // VibeVault – Item Detail Screen
 // One live listing: the price is re-checked on the marketplace when
-// the screen opens. Shows recorded price history (and a forecast once
-// there is enough of it), price alerts, style fit, eco impact,
-// purchase logging, and links out to the marketplace and other stores.
+// the screen opens. Shows the model's "when to buy" advice with its
+// track record, the full recorded price history, valid coupons,
+// price alerts, style fit, purchase logging, and links out to the
+// marketplace and to the same item on other marketplaces.
 // ============================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -17,6 +18,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -25,32 +27,39 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
 import { BorderRadius, Colors, FontSize, PLATFORM_COLORS, STYLE_COLORS, Spacing } from '../constants/theme';
-import { EXTERNAL_STORES, ExternalStore, REGION_LABELS } from '../constants/marketplaces';
-import { useActiveAlertForItem, useIsPurchased, useIsWishlisted, useItem } from '../store/hooks';
+import { DEPARTMENT_LABELS } from '../constants/marketplaces';
+import { backendConfig } from '../config';
+import { countryFlag, countryName } from '../data/countries';
+import { useActiveAlertForItem, useIsPurchased, useIsWishlisted, useItem, useOffersForItem, useTrackRecord } from '../store/hooks';
 import { useStore } from '../store/useStore';
-import { FashionItem, StyleArchetype } from '../types';
-import { ItemDetailParams } from '../navigation/types';
+import { FashionItem, PredictionHorizon, PricePoint, StyleArchetype } from '../types';
+import { ItemDetailParams, ItemDetailTab } from '../navigation/types';
 import GradientCard from '../components/common/GradientCard';
+import OfferRow from '../components/common/OfferRow';
 import PriceChart from '../components/common/PriceChart';
 import ProgressBar from '../components/common/ProgressBar';
 import ProductImage from '../components/common/ProductImage';
 import Tag from '../components/common/Tag';
 import EmptyState from '../components/common/EmptyState';
 import ScreenHeader from '../components/common/ScreenHeader';
+import { priceIn } from '../services/catalog';
+import { fetchPriceHistory } from '../services/catalogApi';
 import {
-  generateForecast,
+  getBuyAdvice,
   getDealScore,
-  getOptimalPurchaseWindow,
-  getPredictionRange,
   historyDays,
+  isAtRecordLow,
+  MAIN_HORIZON,
+  predictionFor,
   priceChangeSinceFirst,
+  seasonalInsight,
+  suggestedTarget as suggestTarget,
 } from '../services/priceEngine';
-import { externalSearchUrl, marketplaceCtaLabel, openItemOnMarketplace, openUrl, searchQueryFor } from '../services/linking';
-import { CO2_KG_PER_TREE_YEAR, NEW_ITEM_FOOTPRINT_KG, WATER_LITERS_PER_KG_CO2 } from '../services/sustainability';
+import { compareLinks, marketplaceCtaLabel, openItemOnMarketplace, openUrl } from '../services/linking';
 import { useKeyboardHeight } from '../hooks/useKeyboardHeight';
 import { confirmAction, notify } from '../utils/dialog';
 import { formatDate, formatShortDate } from '../utils/date';
-import { currencySymbol, formatMoney, formatNumber, formatRelativeTime, parsePriceInput, percentOff } from '../utils/format';
+import { currencySymbol, formatMoney, formatMoneyWhole, formatPercent, formatRelativeTime, parsePriceInput, percentOff } from '../utils/format';
 
 const CONDITION_SCORE: Record<string, number> = {
   'New with tags': 100,
@@ -58,6 +67,16 @@ const CONDITION_SCORE: Record<string, number> = {
   Good: 65,
   Fair: 45,
   'Well-loved': 25,
+  'Pre-owned': 50,
+};
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const BASIS_TEXT: Record<string, string> = {
+  listing: 'this listing’s own price history in the same situation',
+  category: 'similar listings in the same category on this marketplace',
+  marketplace: 'similar listings on this marketplace',
+  situation: 'listings in the same price situation across marketplaces',
+  all: 'every tracked listing',
 };
 
 const STYLING_TIPS: Record<StyleArchetype, string[]> = {
@@ -81,22 +100,37 @@ function getStylingTips(item: FashionItem): string[] {
   return tips.slice(0, 4);
 }
 
-/** Suggested alert target: the forecast low when prices are falling, otherwise 10% off. */
-function suggestTarget(item: FashionItem, forecastLow: number | null): number {
-  const raw = forecastLow !== null && forecastLow < item.currentPrice ? forecastLow : item.currentPrice * 0.9;
-  return item.currency === 'INR' ? Math.max(1, Math.floor(raw)) : Math.max(0.01, Math.floor(raw * 100) / 100);
+/** Every recorded and archived price of the listing (the catalogue only carries 30 days). */
+function useFullHistory(item: FashionItem): PricePoint[] {
+  const [history, setHistory] = useState<PricePoint[]>(item.priceHistory);
+  useEffect(() => {
+    const config = backendConfig;
+    if (!config) return undefined;
+    let active = true;
+    fetchPriceHistory(config, item.id)
+      .then((points) => {
+        if (active && points.length >= item.priceHistory.length) setHistory(points);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [item.id, item.priceHistory]);
+  return history;
 }
 
 const USE_NATIVE_DRIVER = RNPlatform.OS !== 'web';
-type TabKey = 'overview' | 'price' | 'style';
-const TABS: { key: TabKey; label: string }[] = [
+const TABS: { key: ItemDetailTab; label: string }[] = [
   { key: 'overview', label: 'Overview' },
   { key: 'price', label: 'Price' },
   { key: 'style', label: 'Style Fit' },
 ];
 
-/** live: just re-checked on the marketplace · recent: checked in the last few minutes · stale: couldn't re-check. */
-type LiveState = 'checking' | 'live' | 'recent' | 'stale' | 'off';
+/**
+ * live: just re-checked on the marketplace · recent: checked in the last few minutes ·
+ * stale: couldn't re-check · unsupported: the marketplace's API can't re-check one listing.
+ */
+type LiveState = 'checking' | 'live' | 'recent' | 'stale' | 'unsupported' | 'off';
 
 /** Re-checks the listing on its marketplace once when the screen opens. */
 function useLiveCheck(itemId: string | undefined): LiveState {
@@ -155,7 +189,7 @@ export default function ItemDetailScreen() {
     );
   }
   // Keyed by item so a different item never inherits another item's local state.
-  return <ItemDetailContent key={item.id} item={item} live={live} />;
+  return <ItemDetailContent key={item.id} item={item} live={live} initialTab={route.params?.tab ?? 'overview'} />;
 }
 
 function LiveLine({ item, live }: { item: FashionItem; live: LiveState }) {
@@ -170,27 +204,35 @@ function LiveLine({ item, live }: { item: FashionItem; live: LiveState }) {
   }
   const fresh = live === 'live' || live === 'recent';
   const text = fresh
-    ? `Live price from ${item.platform} · checked ${formatRelativeTime(item.lastChecked)}`
-    : `Couldn’t reach ${item.platform} — showing the price recorded ${formatRelativeTime(item.lastChecked)}`;
+    ? `Live price from ${item.siteName} · checked ${formatRelativeTime(item.lastChecked)}`
+    : live === 'unsupported'
+      ? `Price from ${item.platform}'s regular update · seen ${formatRelativeTime(item.lastChecked)}`
+      : `Couldn’t reach ${item.platform} — showing the price recorded ${formatRelativeTime(item.lastChecked)}`;
   return (
     <View style={styles.liveRow} accessibilityLabel={text}>
-      <View style={[styles.liveDot, { backgroundColor: fresh ? Colors.success : Colors.warning }]} />
-      <Text style={[styles.liveText, !fresh && { color: Colors.warning }]}>{text}</Text>
+      <View style={[styles.liveDot, { backgroundColor: fresh || live === 'unsupported' ? Colors.success : Colors.warning }]} />
+      <Text style={[styles.liveText, !fresh && live !== 'unsupported' && { color: Colors.warning }]}>{text}</Text>
     </View>
   );
 }
 
-function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState }) {
+function ItemDetailContent({ item, live, initialTab }: { item: FashionItem; live: LiveState; initialTab: ItemDetailTab }) {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  // The photo takes up to 42% of the screen, so small phones still see the price and details.
+  const { height: windowHeight } = useWindowDimensions();
+  const heroHeight = Math.round(Math.min(340, Math.max(220, windowHeight * 0.42)));
   const keyboardHeight = useKeyboardHeight();
   const scrollRef = useRef<ScrollView>(null);
 
-  const { isProfileComplete, userStyles, toggleWishlist, addPriceAlert, removePriceAlert, logPurchase, undoPurchase, purchase } =
+  const { isProfileComplete, userStyles, homeCurrency, rates, marketplaces, toggleWishlist, addPriceAlert, removePriceAlert, logPurchase, undoPurchase, purchase } =
     useStore(
       useShallow((s) => ({
         isProfileComplete: s.isProfileComplete,
         userStyles: s.profile.styleArchetypes,
+        homeCurrency: s.profile.currency,
+        rates: s.fxRates,
+        marketplaces: s.marketplaces,
         toggleWishlist: s.toggleWishlist,
         addPriceAlert: s.addPriceAlert,
         removePriceAlert: s.removePriceAlert,
@@ -202,39 +244,35 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
   const isWishlisted = useIsWishlisted(item.id);
   const activeAlert = useActiveAlertForItem(item.id);
   const isPurchased = useIsPurchased(item.id);
+  const offers = useOffersForItem(item);
+  const trackRecord = useTrackRecord(MAIN_HORIZON, item.source);
+  const fullHistory = useFullHistory(item);
 
   const [alertInput, setAlertInput] = useState('');
-  const [activeTab, setActiveTab] = useState<TabKey>('overview');
-  const [headerVisible, setHeaderVisible] = useState(false);
+  const [activeTab, setActiveTab] = useState<ItemDetailTab>(initialTab);
+  const [copiedOfferId, setCopiedOfferId] = useState<string | null>(null);
 
   const money = useCallback((value: number) => formatMoney(value, item.currency), [item.currency]);
   const dealScore = getDealScore(item);
   const savingsPercent = percentOff(item.currentPrice, item.originalPrice);
-  const retailLabel = item.source === 'flipkart' ? 'MRP' : 'retail';
-  const forecast = useMemo(() => generateForecast(item, 30), [item]);
-  const optimal = useMemo(() => getOptimalPurchaseWindow(item), [item]);
-  const range7d = useMemo(() => getPredictionRange(item, 7), [item]);
-  const range30d = useMemo(() => getPredictionRange(item, 30), [item]);
-  const trackedDays = historyDays(item.priceHistory);
-  const change = useMemo(() => priceChangeSinceFirst(item.priceHistory), [item.priceHistory]);
-  const suggestedTarget = suggestTarget(item, optimal.hasForecast && optimal.bestDay > 0 ? optimal.bestPrice : null);
-  const searchQuery = useMemo(() => searchQueryFor(item), [item]);
-  const newFootprint = NEW_ITEM_FOOTPRINT_KG[item.category];
+  const retailLabel = item.source === 'flipkart' ? 'MRP' : 'list price';
+  const advice = getBuyAdvice(item);
+  const trackedDays = item.stats?.days ?? historyDays(fullHistory);
+  const change = useMemo(() => priceChangeSinceFirst(fullHistory), [fullHistory]);
+  const seasonal = useMemo(() => seasonalInsight(fullHistory), [fullHistory]);
+  const recordLow = isAtRecordLow(item);
+  const suggestedTarget = suggestTarget(item);
+  const links = useMemo(() => compareLinks(item, marketplaces), [item, marketplaces]);
+  const homePrice = item.currency !== homeCurrency ? priceIn(item, homeCurrency, rates) : null;
   const byline = [item.brand, item.seller ? `sold by ${item.seller}` : null].filter(Boolean).join(' · ') || item.platform;
 
   // ---- Scroll-linked header ----
   const scrollY = useRef(new Animated.Value(0)).current;
-  const headerOpacity = scrollY.interpolate({ inputRange: [120, 200], outputRange: [0, 1], extrapolate: 'clamp' });
+  // The bar behind the back button fades in as the photo scrolls away.
+  const headerOpacity = scrollY.interpolate({ inputRange: [heroHeight - 220, heroHeight - 140], outputRange: [0, 1], extrapolate: 'clamp' });
   const imageScale = scrollY.interpolate({ inputRange: [-120, 0], outputRange: [1.3, 1], extrapolate: 'clamp' });
   const onScroll = useMemo(
-    () =>
-      Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
-        useNativeDriver: USE_NATIVE_DRIVER,
-        listener: (e: { nativeEvent: { contentOffset: { y: number } } }) => {
-          const visible = e.nativeEvent.contentOffset.y > 160;
-          setHeaderVisible((prev) => (prev === visible ? prev : visible));
-        },
-      }),
+    () => Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: USE_NATIVE_DRIVER }),
     [scrollY],
   );
 
@@ -277,17 +315,18 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
   const handleLogPurchase = () => {
     const logged = logPurchase(item.id);
     if (!logged) return;
-    if (logged.secondhand) {
-      notify('🌱 Nice find!', `About ${logged.co2Saved} kg of CO₂ saved has been added to your Eco Impact.`);
-    } else {
-      notify('Purchase logged', 'Added to your purchases. Only pre-owned finds count toward CO₂ saved.');
-    }
+    notify(
+      logged.secondhand ? '🌱 Nice find!' : 'Purchase logged',
+      logged.savedInHome
+        ? `Added to your purchases — ${formatMoneyWhole(logged.savedInHome, logged.homeCurrency)} below the ${retailLabel}.`
+        : 'Added to your purchases.',
+    );
   };
 
   const handleUndoPurchase = () => {
     confirmAction({
       title: 'Remove purchase?',
-      message: 'This removes the purchase from your Eco Impact stats.',
+      message: 'This removes the purchase from your impact stats.',
       confirmText: 'Remove',
       destructive: true,
       onConfirm: () => undoPurchase(item.id),
@@ -299,9 +338,9 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
     if (!opened) notify('Unable to open link', `Could not open ${item.platform} on your device.`);
   };
 
-  const handleSearchStore = async (store: ExternalStore) => {
-    const opened = await openUrl(externalSearchUrl(store, searchQuery));
-    if (!opened) notify('Unable to open link', `Could not open ${store} on your device.`);
+  const handleCompare = async (label: string, url: string) => {
+    const opened = await openUrl(url);
+    if (!opened) notify('Unable to open link', `Could not open ${label} on your device.`);
   };
 
   const goToProfiler = () => navigation.navigate('Profiler');
@@ -310,31 +349,16 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
 
   return (
     <View style={styles.container}>
-      {/* Compact header that fades in once the hero scrolls away */}
-      <Animated.View
-        style={[
-          styles.floatingHeader,
-          { opacity: headerOpacity, paddingTop: insets.top + Spacing.sm, pointerEvents: headerVisible ? 'auto' : 'none' },
-        ]}
-        accessibilityElementsHidden={!headerVisible}
-        importantForAccessibility={headerVisible ? 'auto' : 'no-hide-descendants'}
-      >
-        <TouchableOpacity onPress={goBack} style={styles.floatingBack} accessibilityRole="button" accessibilityLabel="Go back" hitSlop={8}>
-          <Text style={styles.floatingBackText}>← Back</Text>
+      {/* One back button, always on top. The bar behind it and the title fade in once the hero scrolls away. */}
+      <View style={[styles.topBar, { paddingTop: insets.top + Spacing.sm }]}>
+        <Animated.View style={[StyleSheet.absoluteFill, styles.topBarBackground, { opacity: headerOpacity }]} />
+        <TouchableOpacity style={styles.roundButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="Go back" hitSlop={8}>
+          <Ionicons name="arrow-back" size={20} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.floatingTitle} numberOfLines={1}>
+        <Animated.Text style={[styles.topBarTitle, { opacity: headerOpacity }]} numberOfLines={1} aria-hidden>
           {item.title}
-        </Text>
-        <TouchableOpacity
-          onPress={handleWishlistToggle}
-          style={styles.floatingHeart}
-          accessibilityRole="button"
-          accessibilityLabel={isWishlisted ? 'Remove from wishlist' : 'Save to wishlist'}
-          hitSlop={8}
-        >
-          <Text style={styles.heartIcon}>{isWishlisted ? '❤️' : '🤍'}</Text>
-        </TouchableOpacity>
-      </Animated.View>
+        </Animated.Text>
+      </View>
 
       <Animated.ScrollView
         ref={scrollRef}
@@ -344,7 +368,7 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
         contentContainerStyle={{ paddingBottom: 120 + keyboardHeight }}
       >
         {/* Hero image */}
-        <View style={styles.imageContainer}>
+        <View style={[styles.imageContainer, { height: heroHeight }]}>
           <Animated.View style={[StyleSheet.absoluteFill, { transform: [{ scale: imageScale }] }]}>
             <ProductImage
               uri={item.image}
@@ -366,29 +390,11 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
             </View>
           )}
 
-          <View style={[styles.platformBadge, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}>
+          <View style={[styles.platformBadge, { backgroundColor: PLATFORM_COLORS[item.source] || Colors.primary }]}>
             <Text style={styles.platformText}>
-              {item.platform} · {REGION_LABELS[item.region]}
+              {item.siteName} · {countryFlag(item.market)}
             </Text>
           </View>
-
-          <View style={[styles.heroButtonWrap, { top: insets.top + 10, left: 16 }]}>
-            <TouchableOpacity style={styles.heroButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="Go back">
-              <Text style={styles.heroButtonText}>←</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Animated.View style={[styles.heroButtonWrap, { top: insets.top + 10, right: 16, transform: [{ scale: heartAnim }] }]}>
-            <TouchableOpacity
-              style={styles.heroButton}
-              onPress={handleWishlistToggle}
-              accessibilityRole="button"
-              accessibilityLabel={isWishlisted ? 'Remove from wishlist' : 'Save to wishlist'}
-              aria-selected={isWishlisted}
-            >
-              <Text style={styles.heartIcon}>{isWishlisted ? '❤️' : '🤍'}</Text>
-            </TouchableOpacity>
-          </Animated.View>
         </View>
 
         {/* Title & price */}
@@ -397,7 +403,9 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
             <View style={styles.unavailableBanner} accessibilityRole="alert">
               <Ionicons name="alert-circle-outline" size={18} color={Colors.warning} />
               <Text style={styles.unavailableText}>
-                No longer available on {item.platform} — it may have sold out. Last recorded price {money(item.currentPrice)}.
+                {item.endReason === 'stale'
+                  ? `${item.platform} hasn’t listed this for a few days — it may have sold out. Last recorded price ${money(item.currentPrice)}.`
+                  : `No longer available on ${item.platform} — it sold out or was removed. Last recorded price ${money(item.currentPrice)}.`}
               </Text>
             </View>
           )}
@@ -409,6 +417,7 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
             </View>
             <View style={styles.priceStack}>
               <Text style={[styles.currentPrice, !item.available && styles.priceUnavailable]}>{money(item.currentPrice)}</Text>
+              {homePrice !== null && <Text style={styles.homePrice}>≈ {formatMoneyWhole(homePrice, homeCurrency)}</Text>}
               {savingsPercent > 0 && item.originalPrice !== null && (
                 <>
                   <Text style={styles.originalPrice}>{money(item.originalPrice)}</Text>
@@ -435,7 +444,12 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
               <Text style={styles.metaChipText}>📦 {item.category}</Text>
             </View>
             <View style={styles.metaChip}>
-              <Text style={styles.metaChipText}>📍 {REGION_LABELS[item.region]}</Text>
+              <Text style={styles.metaChipText}>👤 {DEPARTMENT_LABELS[item.department]}</Text>
+            </View>
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipText}>
+                {countryFlag(item.market)} For {countryName(item.market)}
+              </Text>
             </View>
           </View>
 
@@ -489,13 +503,13 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
               )}
               <View style={styles.listingRow}>
                 <Text style={styles.listingLabel}>Marketplace</Text>
-                <Text style={styles.listingValue}>
-                  {item.platform} ({REGION_LABELS[item.region]})
-                </Text>
+                <Text style={styles.listingValue}>{item.siteName}</Text>
               </View>
-              {item.currency !== 'INR' && (
+              {item.currency !== homeCurrency && (
                 <Text style={styles.smallNote}>
-                  Priced in {item.currency} by the seller. Shipping, customs and conversion fees are shown on {item.platform} at checkout.
+                  Priced in {item.currency}
+                  {homePrice !== null ? ` (≈ ${formatMoneyWhole(homePrice, homeCurrency)} at today’s ECB rate)` : ''}. Shipping, duties and card
+                  conversion fees are shown on {item.platform} at checkout.
                 </Text>
               )}
             </GradientCard>
@@ -508,12 +522,12 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
                   <Text style={styles.metricLabel}>Deal Score</Text>
                 </View>
                 <View style={styles.metricCard}>
-                  <Text style={[styles.metricBig, { color: Colors.ecoGreen }]}>{item.sustainabilityScore}</Text>
-                  <Text style={styles.metricLabel}>Eco Score</Text>
+                  <Text style={[styles.metricBig, { color: Colors.ecoGreen }]}>{item.stats ? money(item.stats.lowest) : '—'}</Text>
+                  <Text style={styles.metricLabel}>Lowest recorded</Text>
                 </View>
                 <View style={styles.metricCard}>
-                  <Text style={[styles.metricBig, { color: Colors.accent }]}>{item.secondhand ? `${item.co2Saved}kg` : '—'}</Text>
-                  <Text style={styles.metricLabel}>CO₂ Saved</Text>
+                  <Text style={[styles.metricBig, { color: Colors.accent }]}>{trackedDays}</Text>
+                  <Text style={styles.metricLabel}>Days tracked</Text>
                 </View>
                 <View style={styles.metricCard}>
                   <Text style={[styles.metricBig, { color: Colors.warning }]}>{isProfileComplete ? `${item.matchScore}%` : '—'}</Text>
@@ -533,8 +547,6 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
                   />
                 </>
               )}
-              <Text style={styles.barLabel}>Sustainability · {item.sustainabilityScore}/100</Text>
-              <ProgressBar progress={item.sustainabilityScore} height={8} gradient={Colors.gradientEco} accessibilityLabel="Sustainability" />
               {item.secondhand && (
                 <>
                   <Text style={styles.barLabel}>Condition · {item.condition}</Text>
@@ -543,37 +555,15 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
               )}
             </GradientCard>
 
-            <GradientCard style={styles.section} gradient={Colors.gradientEco}>
-              <Text style={styles.sectionTitle}>Eco Impact</Text>
-              {item.secondhand ? (
-                <>
-                  <Text style={styles.ecoDesc}>Choosing this pre-loved piece over buying new saves roughly:</Text>
-                  <View style={styles.ecoItems}>
-                    <View style={styles.ecoItem}>
-                      <Text style={styles.ecoEmoji}>💨</Text>
-                      <Text style={styles.ecoValue}>{item.co2Saved} kg</Text>
-                      <Text style={styles.ecoUnit}>CO₂ emissions</Text>
-                    </View>
-                    <View style={styles.ecoItem}>
-                      <Text style={styles.ecoEmoji}>💧</Text>
-                      <Text style={styles.ecoValue}>{formatNumber(item.co2Saved * WATER_LITERS_PER_KG_CO2)} L</Text>
-                      <Text style={styles.ecoUnit}>Water</Text>
-                    </View>
-                    <View style={styles.ecoItem}>
-                      <Text style={styles.ecoEmoji}>🌱</Text>
-                      <Text style={styles.ecoValue}>{(item.co2Saved / CO2_KG_PER_TREE_YEAR).toFixed(2)}</Text>
-                      <Text style={styles.ecoUnit}>Tree-years of CO₂</Text>
-                    </View>
-                  </View>
-                  <Text style={[styles.ecoDesc, styles.ecoFootnote]}>Typical figures for the category; estimates, not measurements.</Text>
-                </>
-              ) : (
+            {item.secondhand && (
+              <GradientCard style={styles.section} gradient={Colors.gradientEco}>
+                <Text style={styles.sectionTitle}>♻️ Pre-owned</Text>
                 <Text style={styles.ecoDesc}>
-                  This is a new item. Making a new piece in {item.category.toLowerCase()} typically emits around {newFootprint} kg of CO₂ — a
-                  pre-owned find avoids most of that. Try the pre-owned listings from eBay in Discover.
+                  Buying this keeps an existing piece in use instead of a new one being made.
+                  {item.condition !== 'Pre-owned' ? ` The seller grades it “${item.condition}”.` : ' The seller hasn’t graded its condition — check the photos.'}
                 </Text>
-              )}
-            </GradientCard>
+              </GradientCard>
+            )}
 
             <GradientCard style={styles.section}>
               <Text style={styles.sectionTitle}>Bought It?</Text>
@@ -581,7 +571,7 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
                 <>
                   <Text style={styles.purchasedText}>
                     ✅ Logged on {formatDate(purchase.purchasedAt)} for {formatMoney(purchase.pricePaid, purchase.currency)}
-                    {purchase.secondhand ? ' — counted in your Eco Impact.' : '.'}
+                    {purchase.secondhand ? ' — counted as a pre-owned find.' : '.'}
                   </Text>
                   <TouchableOpacity onPress={handleUndoPurchase} style={styles.secondaryBtn} accessibilityRole="button">
                     <Text style={styles.secondaryBtnText}>Undo purchase</Text>
@@ -590,9 +580,7 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
               ) : (
                 <>
                   <Text style={styles.helperText}>
-                    {item.secondhand
-                      ? 'Bought it on ' + item.platform + '? Log it to track the CO₂, water and money you’ve saved by thrifting.'
-                      : 'Bought it on ' + item.platform + '? Log it to keep track of what you’ve spent and saved.'}
+                    Bought it on {item.platform}? Log it to keep track of what you’ve spent and saved{item.secondhand ? ', and your pre-owned finds' : ''}.
                   </Text>
                   <TouchableOpacity onPress={handleLogPurchase} activeOpacity={0.85} accessibilityRole="button">
                     <LinearGradient colors={Colors.gradientEco} style={styles.primaryBtn}>
@@ -607,72 +595,95 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
 
         {activeTab === 'price' && (
           <View style={styles.tabContent}>
-            <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>{forecast.length > 0 ? 'Price History & Forecast' : 'Price History'}</Text>
-              <PriceChart history={item.priceHistory} forecast={forecast} currency={item.currency} height={160} />
-              <Text style={styles.smallNote}>
-                Recorded daily from {item.platform} · {trackedDays} day{trackedDays === 1 ? '' : 's'} of data
-                {change && change.percent !== 0
-                  ? ` · ${change.percent < 0 ? '▼' : '▲'} ${Math.abs(change.percent)}% since ${formatShortDate(change.since)}`
-                  : ''}
-              </Text>
-            </GradientCard>
-
-            <GradientCard style={styles.section} gradient={optimal.hasForecast ? Colors.gradientEco : undefined}>
-              <Text style={styles.sectionTitle}>Best Time to Buy</Text>
-              <Text style={[styles.recommendation, !optimal.hasForecast && styles.recommendationMuted]}>{optimal.recommendation}</Text>
-              {optimal.hasForecast && (
-                <View style={styles.optimalGrid}>
-                  <View style={styles.optimalItem}>
-                    <Text style={styles.optimalLabel}>Best Price</Text>
-                    <Text style={styles.optimalValue}>{money(optimal.bestPrice)}</Text>
+            <GradientCard
+              style={styles.section}
+              gradient={advice?.verdict === 'buy' ? Colors.gradientEco : advice?.verdict === 'wait' ? Colors.gradientAccent : undefined}
+            >
+              <Text style={styles.sectionTitle}>When to buy</Text>
+              {!item.available ? (
+                <Text style={styles.helperText}>This listing is no longer for sale.</Text>
+              ) : advice ? (
+                <>
+                  <Text style={styles.verdict}>{advice.verdict === 'buy' ? '🟢 ' : advice.verdict === 'wait' ? '⏳ ' : '⚖️ '}{advice.headline}</Text>
+                  <Text style={styles.recommendation}>{advice.detail}</Text>
+                  <View style={styles.optimalGrid}>
+                    {([7, 14, 30] as PredictionHorizon[]).map((h) => {
+                      const p = predictionFor(item, h);
+                      return (
+                        <View key={h} style={styles.optimalItem} accessibilityLabel={p ? `${formatPercent(p.pDrop)} chance of a 5% lower price within ${h} days` : undefined}>
+                          <Text style={styles.optimalLabel}>{h} days</Text>
+                          <Text style={styles.optimalValue}>{p ? formatPercent(p.pDrop) : '—'}</Text>
+                          <Text style={styles.optimalLabel}>chance ≥5% cheaper</Text>
+                        </View>
+                      );
+                    })}
                   </View>
-                  <View style={styles.optimalItem}>
-                    <Text style={styles.optimalLabel}>Savings</Text>
-                    <Text style={styles.optimalValue}>{money(optimal.savings)}</Text>
-                  </View>
-                  <View style={styles.optimalItem}>
-                    <Text style={styles.optimalLabel}>When</Text>
-                    <Text style={styles.optimalValue}>{optimal.bestDay === 0 ? 'Now' : `In ${optimal.bestDay}d`}</Text>
-                  </View>
-                  <View style={styles.optimalItem}>
-                    <Text style={styles.optimalLabel}>Save</Text>
-                    <Text style={styles.optimalValue}>{optimal.savingsPercent}%</Text>
-                  </View>
-                </View>
+                  <Text style={styles.adviceLine}>
+                    Typical lowest price over the next {advice.horizon} days: {money(advice.expectedLow)}
+                    {advice.saving > 0 ? ` (${money(advice.saving)} less)` : ''}.
+                  </Text>
+                  {item.secondhand && (predictionFor(item)?.pGone ?? 0) > 0 && (
+                    <Text style={styles.adviceLine}>
+                      {formatPercent(predictionFor(item)!.pGone)} of similar listings sold or were removed within {advice.horizon} days before getting cheaper.
+                    </Text>
+                  )}
+                  <Text style={styles.adviceBasis}>
+                    Learnt from what actually happened to {BASIS_TEXT[predictionFor(item)!.basis]}
+                    {predictionFor(item)!.basis !== 'listing' ? ` (${predictionFor(item)!.basisListings} listings)` : ''} · updated{' '}
+                    {formatShortDate(item.prediction!.madeOn)}.
+                  </Text>
+                  {trackRecord && trackRecord.resolved > 0 ? (
+                    <Text style={styles.adviceBasis}>
+                      Track record ({trackRecord.horizon}-day calls{trackRecord.source ? ` on ${item.platform}` : ''}, since{' '}
+                      {trackRecord.since ? formatShortDate(trackRecord.since) : 'launch'}):
+                      {trackRecord.waitCalls > 0 ? ` "wait" was right ${formatPercent(trackRecord.waitCorrect / trackRecord.waitCalls)} of ${trackRecord.waitCalls} times;` : ''}
+                      {trackRecord.buyCalls > 0 ? ` "buy now" was right ${formatPercent(trackRecord.buyCorrect / trackRecord.buyCalls)} of ${trackRecord.buyCalls} times.` : ''}
+                    </Text>
+                  ) : (
+                    <Text style={styles.adviceBasis}>The track record appears once the first predictions’ windows have closed.</Text>
+                  )}
+                </>
+              ) : (
+                <Text style={[styles.recommendation, styles.recommendationMuted]}>
+                  📊 No prediction yet. VibeVault records every listing’s price daily and learns how prices like this one move; a buy-or-wait
+                  call appears once at least 30 tracked listings have complete outcomes (or right after a price change, at the next daily
+                  update). Nothing is guessed in the meantime.
+                </Text>
+              )}
+              {recordLow && <Text style={styles.recordLow}>🏷️ This is the lowest price recorded for this listing.</Text>}
+              {seasonal && (
+                <Text style={styles.adviceLine}>
+                  📅 Over the last {seasonal.years === 1 ? 'year' : `${seasonal.years} years`}, it was cheapest in {MONTHS[seasonal.month]} — about{' '}
+                  {Math.round(seasonal.below * 100)}% below its typical price.
+                </Text>
               )}
             </GradientCard>
 
-            {range7d && range30d && (
+            <GradientCard style={styles.section}>
+              <Text style={styles.sectionTitle}>Price History</Text>
+              <PriceChart
+                history={fullHistory}
+                currency={item.currency}
+                height={160}
+                expectedLow={advice && advice.expectedLow < item.currentPrice ? advice.expectedLow : null}
+                expectedLowLabel={`Typical low, next ${MAIN_HORIZON} days`}
+              />
+              <Text style={styles.smallNote}>
+                Recorded daily from {item.siteName} · {trackedDays} day{trackedDays === 1 ? '' : 's'} of data
+                {item.stats ? ` · lowest ${money(item.stats.lowest)} on ${formatShortDate(item.stats.lowestOn)} · typical ${money(item.stats.median)}` : ''}
+                {change && change.percent !== 0 ? ` · ${change.percent < 0 ? '▼' : '▲'} ${Math.abs(change.percent)}% since ${formatShortDate(change.since)}` : ''}
+              </Text>
+            </GradientCard>
+
+            {offers.length > 0 && (
               <GradientCard style={styles.section}>
-                <Text style={styles.sectionTitle}>Price Predictions</Text>
-                <View style={styles.predRow}>
-                  {[
-                    { label: 'In 7 days', range: range7d },
-                    { label: 'In 30 days', range: range30d },
-                  ].map(({ label, range }, index) => (
-                    <React.Fragment key={label}>
-                      {index > 0 && <View style={styles.predDivider} />}
-                      <View style={styles.predBox}>
-                        <Text style={styles.predDays}>{label}</Text>
-                        <Text style={styles.predPrice}>{money(range.predicted)}</Text>
-                        <Text style={styles.predRange}>
-                          {money(range.low)} – {money(range.high)}
-                        </Text>
-                        <Text style={styles.predCi}>likely range</Text>
-                        {range.predicted < item.currentPrice * 0.995 ? (
-                          <Text style={styles.predDown}>▼ Trending down</Text>
-                        ) : range.predicted > item.currentPrice * 1.005 ? (
-                          <Text style={styles.predUp}>▲ Trending up</Text>
-                        ) : (
-                          <Text style={styles.predFlat}>● Holding steady</Text>
-                        )}
-                      </View>
-                    </React.Fragment>
-                  ))}
-                </View>
+                <Text style={styles.sectionTitle}>Coupons & offers</Text>
+                {offers.slice(0, 6).map((offer) => (
+                  <OfferRow key={offer.id} offer={offer} copied={copiedOfferId === offer.id} onCopied={setCopiedOfferId} compact />
+                ))}
                 <Text style={styles.smallNote}>
-                  Projected from {trackedDays} days of recorded prices. Sellers can change prices at any time, so treat this as a guide.
+                  From the store’s or affiliate network’s live feed, re-confirmed in the last day and shown only while in date. Tap an offer to
+                  copy its code and open the store; the store checks eligibility (minimum spend, one use per customer) at checkout.
                 </Text>
               </GradientCard>
             )}
@@ -696,14 +707,15 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
               ) : (
                 <>
                   <Text style={styles.helperText}>
-                    Get alerted when the {item.platform} price drops to your target. Suggested target: {money(suggestedTarget)}.
+                    Get alerted when the {item.platform} price drops to your target. Suggested target: {money(suggestedTarget)}
+                    {advice && advice.expectedLow < item.currentPrice ? ' (the typical low the model expects)' : ''}.
                   </Text>
                   <View style={styles.alertInputRow}>
                     <Text style={styles.alertDollar}>{currencySymbol(item.currency).trim()}</Text>
                     <TextInput
                       style={styles.alertInput}
                       keyboardType="decimal-pad"
-                      placeholder={item.currency === 'INR' ? String(suggestedTarget) : suggestedTarget.toFixed(2)}
+                      placeholder={String(suggestedTarget)}
                       placeholderTextColor={Colors.textMuted}
                       value={alertInput}
                       onChangeText={setAlertInput}
@@ -723,26 +735,26 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
               )}
             </GradientCard>
 
-            <GradientCard style={styles.section}>
-              <Text style={styles.sectionTitle}>Compare Elsewhere</Text>
-              <Text style={styles.helperText}>
-                These stores don’t publish prices for apps, so VibeVault can’t track them — tap one to search it for this item.
-              </Text>
-              <View style={styles.storeChips}>
-                {EXTERNAL_STORES.map((store) => (
-                  <TouchableOpacity
-                    key={store}
-                    style={[styles.storeChip, { borderColor: (PLATFORM_COLORS[store] || Colors.border) + '80' }]}
-                    onPress={() => handleSearchStore(store)}
-                    accessibilityRole="link"
-                    accessibilityLabel={`Search ${store} for this item`}
-                  >
-                    <Text style={styles.storeChipText}>{store}</Text>
-                    <Ionicons name="open-outline" size={12} color={Colors.textMuted} />
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </GradientCard>
+            {links.length > 0 && (
+              <GradientCard style={styles.section}>
+                <Text style={styles.sectionTitle}>Compare Elsewhere</Text>
+                <Text style={styles.helperText}>Search for this item on the other marketplaces VibeVault tracks in {countryName(item.market)}.</Text>
+                <View style={styles.storeChips}>
+                  {links.map((link) => (
+                    <TouchableOpacity
+                      key={link.source}
+                      style={[styles.storeChip, { borderColor: (PLATFORM_COLORS[link.source] || Colors.border) + '80' }]}
+                      onPress={() => handleCompare(link.label, link.url)}
+                      accessibilityRole="link"
+                      accessibilityLabel={`Search ${link.label} for this item`}
+                    >
+                      <Text style={styles.storeChipText}>{link.label}</Text>
+                      <Ionicons name="open-outline" size={12} color={Colors.textMuted} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </GradientCard>
+            )}
           </View>
         )}
 
@@ -758,6 +770,11 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
                       <Text style={styles.matchCircleLabel}>match</Text>
                     </LinearGradient>
                   </View>
+                  {item.matchReasons.map((r) => (
+                    <Text key={r} style={styles.reasonLine}>
+                      ✓ {r}
+                    </Text>
+                  ))}
                   <Text style={styles.matchDesc}>
                     {item.matchScore >= 80
                       ? '🔥 Exceptional match! This piece strongly aligns with your style DNA.'
@@ -829,13 +846,14 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
             onPress={handleWishlistToggle}
             activeOpacity={0.8}
             accessibilityRole="button"
+            accessibilityLabel={isWishlisted ? 'Remove from wishlist' : 'Save to wishlist'}
             aria-selected={isWishlisted}
           >
-            <Text style={styles.ctaWishlistText}>{isWishlisted ? '❤️ Saved' : '🤍 Save'}</Text>
+            <Animated.Text style={[styles.ctaWishlistText, { transform: [{ scale: heartAnim }] }]}>{isWishlisted ? '❤️ Saved' : '🤍 Save'}</Animated.Text>
           </TouchableOpacity>
           <TouchableOpacity activeOpacity={0.85} style={{ flex: 1 }} onPress={handleOpenMarketplace} accessibilityRole="link">
             <LinearGradient colors={Colors.gradientPrimary} style={styles.ctaBuy}>
-              <Text style={styles.ctaBuyText}>{marketplaceCtaLabel(item.platform)}</Text>
+              <Text style={styles.ctaBuyText}>{marketplaceCtaLabel(item)}</Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -846,27 +864,32 @@ function ItemDetailContent({ item, live }: { item: FashionItem; live: LiveState 
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  floatingHeader: {
+  topBar: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     zIndex: 100,
     elevation: 10,
-    backgroundColor: Colors.surface,
     flexDirection: 'row',
     alignItems: 'center',
+    gap: Spacing.md,
     paddingHorizontal: Spacing.lg,
-    paddingBottom: Spacing.md,
-    borderBottomColor: Colors.border,
-    borderBottomWidth: 1,
+    paddingBottom: Spacing.sm,
+    pointerEvents: 'box-none',
   },
-  floatingBack: { marginRight: Spacing.md },
-  floatingBackText: { color: Colors.primaryLight, fontSize: FontSize.md, fontWeight: '600' },
-  floatingTitle: { flex: 1, color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: '700' },
-  floatingHeart: { padding: Spacing.xs },
+  topBarBackground: { backgroundColor: Colors.surface, borderBottomColor: Colors.border, borderBottomWidth: 1, pointerEvents: 'none' },
+  topBarTitle: { flex: 1, color: Colors.textPrimary, fontSize: FontSize.md, fontWeight: '700' },
+  roundButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  imageContainer: { height: 340, overflow: 'hidden' },
+  imageContainer: { overflow: 'hidden' },
   heroImage: { width: '100%', height: '100%' },
   imageOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 120, pointerEvents: 'none' },
   matchBadge: { position: 'absolute', bottom: 16, left: 16 },
@@ -875,17 +898,6 @@ const styles = StyleSheet.create({
   matchLbl: { color: '#fff', fontSize: FontSize.xs, fontWeight: '600' },
   platformBadge: { position: 'absolute', bottom: 16, right: 16, paddingHorizontal: 10, paddingVertical: 4, borderRadius: BorderRadius.full },
   platformText: { color: '#fff', fontSize: FontSize.xs, fontWeight: '700' },
-  heroButtonWrap: { position: 'absolute' },
-  heroButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroButtonText: { color: '#fff', fontSize: FontSize.lg, fontWeight: '700' },
-  heartIcon: { fontSize: 18 },
 
   titleSection: { paddingHorizontal: Spacing.lg, paddingTop: Spacing.lg, paddingBottom: Spacing.md },
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: Spacing.sm },
@@ -937,11 +949,6 @@ const styles = StyleSheet.create({
   barLabel: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: Spacing.sm, marginBottom: 4 },
 
   ecoDesc: { color: '#fff', fontSize: FontSize.sm, marginBottom: Spacing.md, opacity: 0.95 },
-  ecoItems: { flexDirection: 'row', justifyContent: 'space-around' },
-  ecoItem: { alignItems: 'center', flex: 1 },
-  ecoEmoji: { fontSize: 26, marginBottom: 4 },
-  ecoValue: { color: '#fff', fontSize: FontSize.md, fontWeight: '800' },
-  ecoUnit: { color: '#fff', fontSize: FontSize.xs, opacity: 0.9, textAlign: 'center' },
 
   helperText: { color: Colors.textSecondary, fontSize: FontSize.sm, lineHeight: 20, marginBottom: Spacing.md },
   purchasedText: { color: Colors.success, fontSize: FontSize.sm, fontWeight: '600', lineHeight: 20, marginBottom: Spacing.sm },
@@ -960,20 +967,10 @@ const styles = StyleSheet.create({
 
   recommendation: { color: '#fff', fontSize: FontSize.md, fontWeight: '600', marginBottom: Spacing.md, lineHeight: 22 },
   optimalGrid: { flexDirection: 'row', justifyContent: 'space-between' },
-  optimalItem: { alignItems: 'center' },
+  optimalItem: { alignItems: 'center', flex: 1 },
   optimalLabel: { color: 'rgba(255,255,255,0.8)', fontSize: FontSize.xs, marginBottom: 2 },
   optimalValue: { color: '#fff', fontSize: FontSize.md, fontWeight: '700' },
 
-  predRow: { flexDirection: 'row' },
-  predBox: { flex: 1, alignItems: 'center', paddingVertical: Spacing.sm },
-  predDays: { color: Colors.textMuted, fontSize: FontSize.sm, marginBottom: 4 },
-  predPrice: { color: Colors.textPrimary, fontSize: FontSize.xl, fontWeight: '800' },
-  predRange: { color: Colors.textSecondary, fontSize: FontSize.xs, marginTop: 4 },
-  predCi: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: 2 },
-  predDown: { color: Colors.success, fontSize: FontSize.xs, fontWeight: '600', marginTop: 4 },
-  predUp: { color: Colors.error, fontSize: FontSize.xs, fontWeight: '600', marginTop: 4 },
-  predFlat: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600', marginTop: 4 },
-  predDivider: { width: 1, backgroundColor: Colors.border, marginVertical: Spacing.sm },
 
   alertActive: { backgroundColor: Colors.success + '20', borderRadius: BorderRadius.md, padding: Spacing.md },
   alertActiveText: { color: Colors.success, fontSize: FontSize.md, fontWeight: '700' },
@@ -1053,9 +1050,14 @@ const styles = StyleSheet.create({
   },
   unavailableText: { flex: 1, color: Colors.warning, fontSize: FontSize.sm, fontWeight: '600', lineHeight: 19 },
   priceUnavailable: { color: Colors.textMuted, textDecorationLine: 'line-through' },
+  homePrice: { color: Colors.textSecondary, fontSize: FontSize.sm, fontWeight: '700' },
+  verdict: { color: '#fff', fontSize: FontSize.xxl, fontWeight: '800', marginBottom: Spacing.xs },
+  adviceLine: { color: Colors.textPrimary, fontSize: FontSize.sm, lineHeight: 20, marginTop: Spacing.sm },
+  adviceBasis: { color: 'rgba(255,255,255,0.75)', fontSize: FontSize.xs, lineHeight: 17, marginTop: Spacing.sm },
+  recordLow: { color: Colors.success, fontSize: FontSize.sm, fontWeight: '700', marginTop: Spacing.sm },
+  reasonLine: { color: Colors.textSecondary, fontSize: FontSize.sm, marginBottom: 4 },
   listingValueShrink: { flexShrink: 1, marginLeft: Spacing.md, textAlign: 'right' },
   smallNote: { color: Colors.textMuted, fontSize: FontSize.xs, lineHeight: 17, marginTop: Spacing.sm },
-  ecoFootnote: { fontSize: FontSize.xs, opacity: 0.8, marginTop: Spacing.md, marginBottom: 0 },
   recommendationMuted: { color: Colors.textSecondary, marginBottom: 0 },
   storeChips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
   storeChip: {

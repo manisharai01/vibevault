@@ -4,7 +4,9 @@
 
 import type { NavigatorScreenParams } from '@react-navigation/native';
 
-export type ItemDetailParams = { itemId: string };
+/** `tab` opens a section other than Overview (e.g. Price, from a price alert). */
+export type ItemDetailParams = { itemId: string; tab?: ItemDetailTab };
+export type ItemDetailTab = 'overview' | 'price' | 'style';
 
 export type DiscoverStackParamList = {
   DiscoverFeed: undefined;
@@ -16,8 +18,11 @@ export type ComposeStackParamList = {
   ItemDetail: ItemDetailParams;
 };
 
+/** The views of the Deals tab. Saved items live on the Wishlist screen (Profile). */
+export type DealsView = 'deals' | 'coupons' | 'alerts';
+
 export type DealsStackParamList = {
-  DealsFeed: { view?: 'deals' | 'alerts' | 'wishlist' } | undefined;
+  DealsFeed: { view?: DealsView } | undefined;
   ItemDetail: ItemDetailParams;
 };
 
@@ -27,7 +32,8 @@ export type QuestsStackParamList = {
 };
 
 export type ProfileStackParamList = {
-  ProfileMain: undefined;
+  /** `pick: 'country'` opens the country picker (e.g. from Deals, to see coupons). */
+  ProfileMain: { pick?: 'country' } | undefined;
   Wishlist: undefined;
   ItemDetail: ItemDetailParams;
 };

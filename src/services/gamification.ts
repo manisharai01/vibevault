@@ -1,11 +1,11 @@
 // ============================================================
 // VibeVault – Gamification (Objective 3)
-// Levels, quests, streaks and eco-impact metrics.
+// Levels, quests, streaks and second-hand impact.
 // All functions are pure so they are easy to test.
 // ============================================================
 
 import { BADGES } from '../data/content';
-import { CO2_KG_PER_TREE_YEAR, WATER_LITERS_PER_KG_CO2 } from './sustainability';
+import { convertAmount, FxRates } from '../utils/format';
 import {
   Badge,
   Purchase,
@@ -138,19 +138,22 @@ export function updateStreak(streak: StreakState, todayKey: string): StreakState
 
 // ---- Sustainability ----
 
-export function computeSustainability(purchases: Purchase[]): SustainabilityMetrics {
-  const thrifted = purchases.filter((p) => p.secondhand);
-  const co2 = thrifted.reduce((sum, p) => sum + Math.max(0, p.co2Saved), 0);
-  // Savings vs retail, converted to rupees with the rate recorded at purchase time.
-  const savedInr = purchases.reduce((sum, p) => {
-    if (p.originalPrice === null || p.inrRate === null) return sum;
-    return sum + Math.max(0, p.originalPrice - p.pricePaid) * p.inrRate;
-  }, 0);
+/**
+ * Facts from the purchases the user logged: how many, how many pre-owned, and the money saved
+ * against the listings' list/MRP prices in the user's currency (converted at the rate recorded at
+ * purchase time, or today's rate for purchases recorded in another currency).
+ */
+export function computeSustainability(purchases: Purchase[], currency: string, rates: FxRates | null): SustainabilityMetrics {
+  let moneySaved = 0;
+  for (const p of purchases) {
+    if (p.savedInHome === null || p.savedInHome <= 0) continue;
+    const saved = p.homeCurrency === currency ? p.savedInHome : convertAmount(p.savedInHome, p.homeCurrency, currency, rates);
+    if (saved !== null) moneySaved += saved;
+  }
   return {
-    totalCO2Saved: Math.round(co2 * 10) / 10,
-    itemsThrifted: thrifted.length,
-    waterSavedLiters: Math.round(co2 * WATER_LITERS_PER_KG_CO2),
-    moneySavedInr: Math.round(savedInr),
-    treesEquivalent: Math.round((co2 / CO2_KG_PER_TREE_YEAR) * 100) / 100,
+    purchases: purchases.length,
+    itemsThrifted: purchases.filter((p) => p.secondhand).length,
+    moneySaved: Math.round(moneySaved),
+    currency,
   };
 }

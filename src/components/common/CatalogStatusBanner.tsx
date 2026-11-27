@@ -9,6 +9,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useShallow } from 'zustand/react/shallow';
 import { BorderRadius, Colors, FontSize, Spacing } from '../../constants/theme';
 import { useStore } from '../../store/useStore';
+import { countryName } from '../../data/countries';
 import { formatRelativeTime } from '../../utils/format';
 import EmptyState from './EmptyState';
 
@@ -20,14 +21,18 @@ interface Props {
 
 /** Full-screen state when there is nothing to show yet; otherwise a one-line freshness note. */
 export default function CatalogStatusBanner({ itemCount, onRetry }: Props) {
-  const { status, error, fetchedAt, updatedAt } = useStore(
+  const { status, error, fetchedAt, updatedAt, marketplaces, country, availableMarkets } = useStore(
     useShallow((s) => ({
       status: s.catalogStatus,
       error: s.catalogError,
       fetchedAt: s.catalogFetchedAt,
       updatedAt: s.catalogUpdatedAt,
+      marketplaces: s.marketplaces,
+      country: s.profile.country,
+      availableMarkets: s.availableMarkets,
     })),
   );
+  const sources = marketplaces.filter((m) => m.availableListings > 0 && (!country || m.markets.includes(country))).map((m) => m.name);
 
   if (status === 'unconfigured') {
     return (
@@ -59,7 +64,19 @@ export default function CatalogStatusBanner({ itemCount, onRetry }: Props) {
         />
       );
     }
-    // Connected, but the server hasn't collected any listings yet.
+    // Connected, but nothing for this country (yet).
+    const elsewhere = availableMarkets.filter((m) => m.market !== country).map((m) => countryName(m.market));
+    if (country && elsewhere.length > 0) {
+      return (
+        <EmptyState
+          icon="globe-outline"
+          title={`No live listings for ${countryName(country)} yet`}
+          message={`Live prices are available for ${elsewhere.slice(0, 6).join(', ')}${elsewhere.length > 6 ? ' and more' : ''}. You can change your country in Profile.`}
+          actionLabel="Refresh"
+          onAction={onRetry}
+        />
+      );
+    }
     return (
       <EmptyState
         icon="hourglass-outline"
@@ -90,7 +107,7 @@ export default function CatalogStatusBanner({ itemCount, onRetry }: Props) {
         <View style={styles.liveDot} />
       )}
       <Text style={styles.lineText}>
-        Live prices from Flipkart & eBay · updated {formatRelativeTime(updatedAt ?? fetchedAt)}
+        Live prices{sources.length ? ` from ${sources.join(', ')}` : ''} · updated {formatRelativeTime(updatedAt ?? fetchedAt)}
       </Text>
     </View>
   );

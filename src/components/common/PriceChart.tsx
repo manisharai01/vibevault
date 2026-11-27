@@ -1,7 +1,9 @@
 // ============================================================
-// VibeVault – SVG Price Chart Component
-// History + forecast line chart with gradient fills. Measures its
-// own width so it fits any container.
+// VibeVault – SVG price-history chart
+// Plots recorded daily prices on a real date axis (gaps stay
+// gaps), marks the lowest recorded price, and can show the price
+// model's typical low for the coming days as a dashed line.
+// Measures its own width so it fits any container.
 // ============================================================
 
 import React, { useState } from 'react';
@@ -9,49 +11,48 @@ import { LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Defs, Line, LinearGradient as SvgGradient, Path, Stop } from 'react-native-svg';
 import { Colors, FontSize, Spacing } from '../../constants/theme';
 import { PricePoint } from '../../types';
-import { formatShortDate } from '../../utils/date';
-import { currencySymbol, formatMoney } from '../../utils/format';
+import { formatDate, formatShortDate } from '../../utils/date';
+import { formatMoney, formatMoneyWhole } from '../../utils/format';
 
-const PAD = { top: 12, right: 12, bottom: 8, left: 44 };
+const PAD = { top: 12, right: 12, bottom: 8, left: 52 };
+const DAY = 86_400_000;
 
 interface PriceChartProps {
   history: PricePoint[];
-  forecast?: PricePoint[];
   currency: string;
+  /** The model's typical lowest price over the coming days (dashed line). */
+  expectedLow?: number | null;
+  expectedLowLabel?: string;
   height?: number;
-}
-
-function axisMoney(value: number, currency: string): string {
-  return currency === 'INR' ? formatMoney(Math.round(value), 'INR') : `${currencySymbol(currency)}${Math.round(value)}`;
 }
 
 type Point = { x: number; y: number };
 
-function smoothPath(points: Point[]): string {
-  if (points.length < 2) return '';
-  let d = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
-  for (let i = 1; i < points.length; i++) {
-    const prev = points[i - 1];
-    const curr = points[i];
-    const cx = (prev.x + curr.x) / 2;
-    d += ` C ${cx.toFixed(1)} ${prev.y.toFixed(1)}, ${cx.toFixed(1)} ${curr.y.toFixed(1)}, ${curr.x.toFixed(1)} ${curr.y.toFixed(1)}`;
+function linePath(points: Point[]): string {
+  return points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+}
+
+/** Splits the series wherever more than 3 days are missing, so gaps aren't drawn as lines. */
+function segments(history: PricePoint[]): PricePoint[][] {
+  const out: PricePoint[][] = [];
+  let current: PricePoint[] = [];
+  for (const p of history) {
+    const prev = current[current.length - 1];
+    if (prev && Date.parse(p.date) - Date.parse(prev.date) > 3 * DAY) {
+      out.push(current);
+      current = [];
+    }
+    current.push(p);
   }
-  return d;
+  if (current.length) out.push(current);
+  return out;
 }
 
-function fillPath(points: Point[], bottom: number): string {
-  if (points.length < 2) return '';
-  const first = points[0].x.toFixed(1);
-  const last = points[points.length - 1].x.toFixed(1);
-  return `${smoothPath(points)} L ${last} ${bottom} L ${first} ${bottom} Z`;
-}
-
-export default function PriceChart({ history, forecast = [], currency, height = 140 }: PriceChartProps) {
+export default function PriceChart({ history, currency, expectedLow = null, expectedLowLabel = 'Typical low ahead', height = 140 }: PriceChartProps) {
   const [width, setWidth] = useState(0);
   const onLayout = (e: LayoutChangeEvent) => setWidth(Math.round(e.nativeEvent.layout.width));
 
-  const all = [...history, ...forecast];
-  if (all.length < 2) {
+  if (history.length < 2) {
     return (
       <Text style={styles.noData}>
         {history.length === 1
@@ -61,31 +62,30 @@ export default function PriceChart({ history, forecast = [], currency, height = 
     );
   }
 
-  const prices = all.map((p) => p.price);
-  const minPrice = Math.min(...prices) * 0.95;
-  const maxPrice = Math.max(...prices) * 1.05;
+  const prices = history.map((p) => p.price);
+  const values = expectedLow !== null ? [...prices, expectedLow] : prices;
+  const minPrice = Math.min(...values) * 0.97;
+  const maxPrice = Math.max(...values) * 1.03;
   const range = maxPrice - minPrice || 1;
+  const t0 = Date.parse(history[0].date);
+  const t1 = Date.parse(history[history.length - 1].date);
+  const span = Math.max(DAY, t1 - t0);
 
   const svgHeight = height + PAD.top + PAD.bottom;
   const plotW = Math.max(1, width - PAD.left - PAD.right);
-  const x = (i: number) => PAD.left + (i / (all.length - 1)) * plotW;
+  const x = (date: string) => PAD.left + ((Date.parse(date) - t0) / span) * plotW;
   const y = (price: number) => PAD.top + height - ((price - minPrice) / range) * height;
   const bottomY = PAD.top + height;
-
-  const historyPts = history.map((p, i) => ({ x: x(i), y: y(p.price) }));
-  const lastHistory = historyPts[historyPts.length - 1];
-  const forecastPts = lastHistory ? [lastHistory, ...forecast.map((p, i) => ({ x: x(history.length + i), y: y(p.price) }))] : [];
-  const splitX = lastHistory ? lastHistory.x : PAD.left;
   const gridPrices = [maxPrice, (maxPrice + minPrice) / 2, minPrice];
+  // Long histories (archived prices) span years, so the axis shows them.
+  const axisDate = t1 - t0 > 300 * DAY ? formatDate : formatShortDate;
 
-  const current = history[history.length - 1]?.price;
-  const lastForecast = forecast[forecast.length - 1]?.price;
-  const summary =
-    current !== undefined
-      ? `Price chart. Latest price ${formatMoney(current, currency)}${
-          lastForecast !== undefined ? `, forecast ${formatMoney(lastForecast, currency)} in ${forecast.length} days` : ''
-        }.`
-      : 'Price chart.';
+  const lowest = history.reduce((best, p) => (p.price < best.price ? p : best), history[0]);
+  const latest = history[history.length - 1];
+  const summary = `Price history, ${history.length} recorded days. Latest ${formatMoney(latest.price, currency)}; lowest ${formatMoney(
+    lowest.price,
+    currency,
+  )} on ${formatShortDate(lowest.date)}${expectedLow !== null ? `; ${expectedLowLabel.toLowerCase()} ${formatMoney(expectedLow, currency)}` : ''}.`;
 
   return (
     <View style={styles.container} onLayout={onLayout} accessible accessibilityRole="image" accessibilityLabel={summary}>
@@ -97,86 +97,56 @@ export default function PriceChart({ history, forecast = [], currency, height = 
                 <Stop offset="0" stopColor={Colors.primary} stopOpacity="0.35" />
                 <Stop offset="1" stopColor={Colors.primary} stopOpacity="0.01" />
               </SvgGradient>
-              <SvgGradient id="forecastFill" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor={Colors.accent} stopOpacity="0.3" />
-                <Stop offset="1" stopColor={Colors.accent} stopOpacity="0.01" />
-              </SvgGradient>
             </Defs>
 
             {gridPrices.map((gp, i) => (
-              <Line
-                key={i}
-                x1={PAD.left}
-                y1={y(gp)}
-                x2={width - PAD.right}
-                y2={y(gp)}
-                stroke={Colors.border}
-                strokeWidth="1"
-                strokeDasharray="4,4"
-              />
+              <Line key={i} x1={PAD.left} y1={y(gp)} x2={width - PAD.right} y2={y(gp)} stroke={Colors.border} strokeWidth="1" strokeDasharray="4,4" />
             ))}
 
-            {historyPts.length >= 2 && <Path d={fillPath(historyPts, bottomY)} fill="url(#historyFill)" />}
-            {forecastPts.length >= 2 && <Path d={fillPath(forecastPts, bottomY)} fill="url(#forecastFill)" />}
-            {historyPts.length >= 2 && (
-              <Path d={smoothPath(historyPts)} fill="none" stroke={Colors.primary} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            {segments(history).map((seg, i) => {
+              const pts = seg.map((p) => ({ x: x(p.date), y: y(p.price) }));
+              if (pts.length < 2) return <Circle key={i} cx={pts[0].x} cy={pts[0].y} r="2" fill={Colors.primary} />;
+              return (
+                <React.Fragment key={i}>
+                  <Path d={`${linePath(pts)} L ${pts[pts.length - 1].x.toFixed(1)} ${bottomY} L ${pts[0].x.toFixed(1)} ${bottomY} Z`} fill="url(#historyFill)" />
+                  <Path d={linePath(pts)} fill="none" stroke={Colors.primary} strokeWidth="2.2" strokeLinejoin="round" />
+                </React.Fragment>
+              );
+            })}
+
+            {expectedLow !== null && (
+              <Line x1={PAD.left} y1={y(expectedLow)} x2={width - PAD.right} y2={y(expectedLow)} stroke={Colors.accent} strokeWidth="1.5" strokeDasharray="6,4" />
             )}
-            {forecastPts.length >= 2 && (
-              <Path
-                d={smoothPath(forecastPts)}
-                fill="none"
-                stroke={Colors.accent}
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeDasharray="6,3"
-              />
-            )}
-            {forecast.length > 0 && (
-              <Line x1={splitX} y1={PAD.top} x2={splitX} y2={bottomY} stroke={Colors.warning} strokeWidth="1.5" strokeDasharray="4,3" />
-            )}
-            {lastHistory && (
-              <>
-                <Circle cx={lastHistory.x} cy={lastHistory.y} r="5" fill={Colors.primary} />
-                <Circle cx={lastHistory.x} cy={lastHistory.y} r="3" fill="#fff" />
-              </>
-            )}
+            <Circle cx={x(lowest.date)} cy={y(lowest.price)} r="4" fill={Colors.success} />
+            <Circle cx={x(latest.date)} cy={y(latest.price)} r="5" fill={Colors.primary} />
+            <Circle cx={x(latest.date)} cy={y(latest.price)} r="3" fill="#fff" />
           </Svg>
 
-          {/* Y-axis labels */}
           <View style={[StyleSheet.absoluteFill, styles.noPointer]}>
             {gridPrices.map((gp, i) => (
               <Text key={i} style={[styles.yLabel, { top: y(gp) - 7 }]}>
-                {axisMoney(gp, currency)}
+                {formatMoneyWhole(gp, currency)}
               </Text>
             ))}
           </View>
 
-          {/* X-axis labels */}
           <View style={styles.dateRow}>
-            <Text style={[styles.dateText, { left: PAD.left }]}>{history[0] ? formatShortDate(history[0].date) : ''}</Text>
-            {forecast.length > 0 ? (
-              <Text style={[styles.dateText, styles.todayText, { left: Math.max(PAD.left + 44, Math.min(splitX - 18, width - 80)) }]}>
-                Latest
-              </Text>
-            ) : (
-              history.length > 1 && (
-                <Text style={[styles.dateText, { right: PAD.right }]}>{formatShortDate(history[history.length - 1].date)}</Text>
-              )
-            )}
-            {forecast.length > 0 && <Text style={[styles.dateText, styles.forecastText, { right: PAD.right }]}>+{forecast.length}d</Text>}
+            <Text style={[styles.dateText, { left: PAD.left }]}>{axisDate(history[0].date)}</Text>
+            <Text style={[styles.dateText, { right: PAD.right }]}>{axisDate(latest.date)}</Text>
           </View>
 
-          {forecast.length > 0 && (
-            <View style={styles.legend}>
-              <View style={[styles.legendLine, { backgroundColor: Colors.primary }]} />
-              <Text style={styles.legendText}>History</Text>
-              <View style={[styles.legendLine, { backgroundColor: Colors.accent, marginLeft: Spacing.md }]} />
-              <Text style={styles.legendText}>Forecast</Text>
-              <View style={[styles.legendDot, { backgroundColor: Colors.warning, marginLeft: Spacing.md }]} />
-              <Text style={styles.legendText}>Latest</Text>
-            </View>
-          )}
+          <View style={styles.legend}>
+            <View style={[styles.legendLine, { backgroundColor: Colors.primary }]} />
+            <Text style={styles.legendText}>Recorded</Text>
+            <View style={[styles.legendDot, { backgroundColor: Colors.success, marginLeft: Spacing.md }]} />
+            <Text style={styles.legendText}>Lowest</Text>
+            {expectedLow !== null && (
+              <>
+                <View style={[styles.legendLine, { backgroundColor: Colors.accent, marginLeft: Spacing.md }]} />
+                <Text style={styles.legendText}>{expectedLowLabel}</Text>
+              </>
+            )}
+          </View>
         </>
       ) : (
         <View style={{ height: svgHeight }} />
@@ -189,12 +159,10 @@ const styles = StyleSheet.create({
   container: { marginVertical: Spacing.sm },
   noPointer: { pointerEvents: 'none' },
   noData: { color: Colors.textMuted, fontSize: FontSize.sm, paddingVertical: Spacing.lg, textAlign: 'center' },
-  yLabel: { position: 'absolute', left: 0, width: 40, color: Colors.textMuted, fontSize: 9, textAlign: 'right' },
+  yLabel: { position: 'absolute', left: 0, width: 48, color: Colors.textMuted, fontSize: 9, textAlign: 'right' },
   dateRow: { height: 16, marginTop: 2 },
   dateText: { position: 'absolute', top: 0, color: Colors.textMuted, fontSize: FontSize.xs },
-  todayText: { color: Colors.warning },
-  forecastText: { color: Colors.accent },
-  legend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: Spacing.sm, gap: 4 },
+  legend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: Spacing.sm, gap: 4, flexWrap: 'wrap' },
   legendLine: { width: 16, height: 2.5, borderRadius: 2 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { color: Colors.textSecondary, fontSize: FontSize.xs, marginRight: 4 },

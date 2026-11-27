@@ -1,16 +1,17 @@
 import { addDays, daysBetween, formatDate, formatShortDate, parseDateKey, toDateKey } from '../utils/date';
 import {
   clamp,
+  convertAmount,
   currencySymbol,
-  formatInr,
   formatMoney,
+  formatMoneyWhole,
   formatNumber,
+  formatPercent,
   formatRelativeTime,
+  formatTimeLeft,
   parsePriceInput,
   percentOff,
-  toInr,
 } from '../utils/format';
-import { hashString, mulberry32 } from '../utils/random';
 
 describe('format', () => {
   it('formats rupees with Indian digit grouping, dropping .00', () => {
@@ -20,26 +21,46 @@ describe('format', () => {
     expect(formatMoney(129999, 'INR')).toBe('₹1,29,999');
     expect(formatMoney(12345678.9, 'INR')).toBe('₹1,23,45,678.90');
     expect(formatMoney(-3, 'INR')).toBe('-₹3');
-    expect(formatInr(1999.6)).toBe('₹2,000');
+    expect(formatMoneyWhole(1999.6, 'INR')).toBe('₹2,000');
+    expect(formatMoneyWhole(1234567, 'INR')).toBe('₹12,34,567');
   });
 
-  it('formats other currencies with two decimals and thousands separators', () => {
+  it('formats other currencies the way they are written', () => {
     expect(formatMoney(12.5, 'USD')).toBe('$12.50');
     expect(formatMoney(1234.567, 'USD')).toBe('$1,234.57');
     expect(formatMoney(5, 'GBP')).toBe('£5.00');
-    expect(formatMoney(5, 'SGD')).toBe('SGD 5.00');
+    expect(formatMoney(5, 'SGD')).toBe('S$5.00');
+    expect(formatMoney(3980, 'JPY')).toBe('¥3,980');
+    expect(formatMoney(25900.4, 'KRW')).toBe('₩25,900');
+    expect(formatMoney(129.9, 'PLN')).toBe('129.90 zł');
+    expect(formatMoney(10, 'XYZ')).toBe('XYZ 10.00');
+    expect(formatMoneyWhole(1250.4, 'USD')).toBe('$1,250');
     expect(currencySymbol('EUR')).toBe('€');
+  });
+
+  it('converts through euro rates and never guesses a missing rate', () => {
+    const rates = { EUR: 1, USD: 1.06, INR: 98.4 };
+    expect(convertAmount(10, 'USD', 'USD', null)).toBe(10);
+    expect(convertAmount(10.6, 'USD', 'EUR', rates)).toBeCloseTo(10, 10);
+    expect(convertAmount(10, 'USD', 'INR', rates)).toBeCloseTo((10 / 1.06) * 98.4, 10);
+    expect(convertAmount(10, 'USD', 'JPY', rates)).toBeNull();
+    expect(convertAmount(10, 'USD', 'INR', null)).toBeNull();
+    expect(convertAmount(Number.NaN, 'USD', 'INR', rates)).toBeNull();
+  });
+
+  it('formats percentages and time left', () => {
+    expect(formatPercent(0.734)).toBe('73%');
+    const now = new Date('2026-11-25T12:00:00Z');
+    expect(formatTimeLeft(null, now)).toBeNull();
+    expect(formatTimeLeft('2026-11-25T11:00:00Z', now)).toBe('ended');
+    expect(formatTimeLeft('2026-11-25T12:30:00Z', now)).toBe('30 min left');
+    expect(formatTimeLeft('2026-11-26T12:00:00Z', now)).toBe('24 h left');
+    expect(formatTimeLeft('2026-11-30T12:00:00Z', now)).toBe('5 days left');
   });
 
   it('never prints NaN or Infinity', () => {
     expect(formatMoney(Number.NaN, 'INR')).toBe('₹0');
     expect(formatMoney(Number.POSITIVE_INFINITY, 'USD')).toBe('$0.00');
-  });
-
-  it('converts to rupees only with a valid rate', () => {
-    expect(toInr(10, 92.24)).toBeCloseTo(922.4);
-    expect(toInr(10, null)).toBeNull();
-    expect(toInr(10, 0)).toBeNull();
   });
 
   it('formats numbers', () => {
@@ -79,6 +100,11 @@ describe('format', () => {
     ['.5', 0.5],
     ['7.', 7],
     ['3.456', 3.46],
+    ['1.299,90', 1299.9],
+    ['USD 12', 12],
+    ['R$ 49,90', 49.9],
+    ['129,90 zł', 129.9],
+    ['¥3,980', 3980],
   ])('parses price input %p', (input, expected) => {
     expect(parsePriceInput(input)).toBe(expected);
   });
@@ -123,24 +149,5 @@ describe('date', () => {
     expect(formatShortDate('2026-03-01')).toBe('Mar 1');
     expect(formatDate(new Date(2026, 4, 3, 12).toISOString())).toBe('May 3, 2026');
     expect(formatDate('not a date')).toBe('not a date');
-  });
-});
-
-describe('random', () => {
-  it('is deterministic', () => {
-    expect(hashString('item-001')).toBe(hashString('item-001'));
-    expect(hashString('item-001')).not.toBe(hashString('item-002'));
-    const a = mulberry32(42);
-    const b = mulberry32(42);
-    expect([a(), a(), a()]).toEqual([b(), b(), b()]);
-  });
-
-  it('produces values in [0, 1)', () => {
-    const rand = mulberry32(123);
-    for (let i = 0; i < 1000; i++) {
-      const v = rand();
-      expect(v).toBeGreaterThanOrEqual(0);
-      expect(v).toBeLessThan(1);
-    }
   });
 });

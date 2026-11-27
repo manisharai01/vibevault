@@ -7,4 +7,12 @@ module.exports = defineConfig([
   {
     ignores: ['dist/*', 'web-build/*', '.expo/*', 'coverage/*'],
   },
+  {
+    // Node.js scripts (CommonJS).
+    files: ['scripts/**/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { __dirname: 'readonly', require: 'readonly', module: 'writable', process: 'readonly', console: 'readonly' },
+    },
+  },
 ]);

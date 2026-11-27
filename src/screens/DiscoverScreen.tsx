@@ -1,8 +1,9 @@
 // ============================================================
 // VibeVault – Discovery Feed Screen (Objective 1)
 //
-// Personalised discovery feed: listings ranked by style match,
-// with sustainability, deal scores and price predictions.
+// Personalised discovery feed: live listings for the user's
+// country, ranked by style match, with deal scores, the price
+// model's buy-or-wait advice and the reasons each piece matches.
 // ============================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -14,10 +15,10 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useShallow } from 'zustand/react/shallow';
 import { BorderRadius, Colors, FontSize, PLATFORM_COLORS, STYLE_COLORS, Shadows, Spacing } from '../constants/theme';
-import { CATEGORIES, PLATFORMS, REGION_LABELS, REGIONS } from '../constants/marketplaces';
+import { CATEGORIES } from '../constants/marketplaces';
 import { useAvailableItems } from '../store/hooks';
 import { useStore } from '../store/useStore';
-import { FashionItem, ItemCategory, Platform, Region } from '../types';
+import { FashionItem, ItemCategory } from '../types';
 import { DiscoverStackParamList, RootTabParamList } from '../navigation/types';
 import Tag from '../components/common/Tag';
 import ChipRow from '../components/common/ChipRow';
@@ -25,9 +26,9 @@ import EmptyState from '../components/common/EmptyState';
 import ProductImage from '../components/common/ProductImage';
 import ScreenHeader from '../components/common/ScreenHeader';
 import CatalogStatusBanner from '../components/common/CatalogStatusBanner';
-import { priceInInr } from '../services/catalog';
+import { priceIn } from '../services/catalog';
 import { refreshAndNotify } from '../services/lifecycle';
-import { getDealScore } from '../services/priceEngine';
+import { getBuyAdvice, getDealScore, isAtRecordLow } from '../services/priceEngine';
 import { formatMoney, percentOff } from '../utils/format';
 
 type Nav = CompositeNavigationProp<
@@ -35,33 +36,36 @@ type Nav = CompositeNavigationProp<
   BottomTabNavigationProp<RootTabParamList>
 >;
 
-type SortKey = 'match' | 'deal' | 'price' | 'sustainability';
+type SortKey = 'match' | 'deal' | 'price' | 'newest';
+type ConditionFilter = 'All' | 'New' | 'Pre-owned';
 
 const CATEGORY_OPTIONS: ('All' | ItemCategory)[] = ['All', ...CATEGORIES];
-const PLATFORM_OPTIONS: ('All' | Platform)[] = ['All', ...PLATFORMS];
-const REGION_OPTIONS: ('All' | Region)[] = ['All', ...REGIONS];
+const CONDITION_OPTIONS: ConditionFilter[] = ['All', 'New', 'Pre-owned'];
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'match', label: 'Best Match' },
-  { key: 'deal', label: 'Deal Score' },
+  { key: 'deal', label: 'Best Deal Now' },
   { key: 'price', label: 'Lowest Price' },
-  { key: 'sustainability', label: 'Most Eco' },
+  { key: 'newest', label: 'Newest' },
 ];
 
 export default function DiscoverScreen() {
   const navigation = useNavigation<Nav>();
   const recommendedItems = useAvailableItems();
-  const { wishlist, isProfileComplete, vibeSummary, toggleWishlist } = useStore(
+  const { wishlist, isProfileComplete, vibeSummary, toggleWishlist, marketplaces, homeCurrency, rates } = useStore(
     useShallow((s) => ({
       wishlist: s.profile.wishlist,
       isProfileComplete: s.isProfileComplete,
       vibeSummary: s.vibeSummary,
       toggleWishlist: s.toggleWishlist,
+      marketplaces: s.marketplaces,
+      homeCurrency: s.profile.currency,
+      rates: s.fxRates,
     })),
   );
 
   const [category, setCategory] = useState<'All' | ItemCategory>('All');
-  const [platform, setPlatform] = useState<'All' | Platform>('All');
-  const [region, setRegion] = useState<'All' | Region>('All');
+  const [platform, setPlatform] = useState<string>('All');
+  const [condition, setCondition] = useState<ConditionFilter>('All');
   const [sortBy, setSortBy] = useState<SortKey>('match');
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -78,14 +82,18 @@ export default function DiscoverScreen() {
   const effectiveSort: SortKey = !isProfileComplete && sortBy === 'match' ? 'deal' : sortBy;
   const sortOptions = isProfileComplete ? SORT_OPTIONS : SORT_OPTIONS.filter((o) => o.key !== 'match');
   const wishlistSet = useMemo(() => new Set(wishlist), [wishlist]);
-  const hasFilters = category !== 'All' || platform !== 'All' || region !== 'All' || query.trim().length > 0;
+  const hasFilters = category !== 'All' || platform !== 'All' || condition !== 'All' || query.trim().length > 0;
+  // Marketplaces that have listings in this feed.
+  const platformOptions = useMemo(() => ['All', ...new Set(recommendedItems.map((i) => i.source))], [recommendedItems]);
+  const platformName = useCallback((source: string) => marketplaces.find((m) => m.source === source)?.name ?? source, [marketplaces]);
 
   const filteredItems = useMemo(() => {
     const q = query.trim().toLowerCase();
     const items = recommendedItems.filter((item) => {
       if (category !== 'All' && item.category !== category) return false;
-      if (platform !== 'All' && item.platform !== platform) return false;
-      if (region !== 'All' && item.region !== region) return false;
+      if (platform !== 'All' && item.source !== platform) return false;
+      if (condition === 'New' && item.secondhand) return false;
+      if (condition === 'Pre-owned' && !item.secondhand) return false;
       if (!q) return true;
       return (
         item.title.toLowerCase().includes(q) ||
@@ -98,11 +106,11 @@ export default function DiscoverScreen() {
     const sorted = [...items];
     switch (effectiveSort) {
       case 'price':
-        // Compare in rupees so ₹ and $ listings sort together.
-        sorted.sort((a, b) => (priceInInr(a) ?? a.currentPrice) - (priceInInr(b) ?? b.currentPrice));
+        // Compare in the user's currency so listings in different currencies sort together.
+        sorted.sort((a, b) => (priceIn(a, homeCurrency, rates) ?? Infinity) - (priceIn(b, homeCurrency, rates) ?? Infinity));
         break;
-      case 'sustainability':
-        sorted.sort((a, b) => b.sustainabilityScore - a.sustainabilityScore);
+      case 'newest':
+        sorted.sort((a, b) => b.firstSeen.localeCompare(a.firstSeen) || a.id.localeCompare(b.id));
         break;
       case 'deal':
         sorted.sort((a, b) => getDealScore(b) - getDealScore(a));
@@ -111,12 +119,12 @@ export default function DiscoverScreen() {
         break; // already ranked by match
     }
     return sorted;
-  }, [recommendedItems, category, platform, region, query, effectiveSort]);
+  }, [recommendedItems, category, platform, condition, query, effectiveSort, homeCurrency, rates]);
 
   const clearFilters = useCallback(() => {
     setCategory('All');
     setPlatform('All');
-    setRegion('All');
+    setCondition('All');
     setQuery('');
   }, []);
 
@@ -169,15 +177,17 @@ export default function DiscoverScreen() {
         </TouchableOpacity>
       )}
       <ChipRow options={CATEGORY_OPTIONS} selected={category} onSelect={setCategory} accessibilityLabel="Category" />
-      <ChipRow options={PLATFORM_OPTIONS} selected={platform} onSelect={setPlatform} accessibilityLabel="Platform" compact />
-      <ChipRow
-        options={REGION_OPTIONS}
-        selected={region}
-        onSelect={setRegion}
-        accessibilityLabel="Region"
-        getLabel={(r) => (r === 'All' ? 'All regions' : REGION_LABELS[r])}
-        compact
-      />
+      {platformOptions.length > 2 && (
+        <ChipRow
+          options={platformOptions}
+          selected={platform}
+          onSelect={setPlatform}
+          accessibilityLabel="Marketplace"
+          getLabel={(source) => (source === 'All' ? 'All marketplaces' : platformName(source))}
+          compact
+        />
+      )}
+      <ChipRow options={CONDITION_OPTIONS} selected={condition} onSelect={setCondition} accessibilityLabel="Condition" compact />
       {recommendedItems.length > 0 && <CatalogStatusBanner itemCount={recommendedItems.length} onRetry={retry} />}
       <View style={styles.sortRow}>
         {sortOptions.map((option) => {
@@ -199,7 +209,8 @@ export default function DiscoverScreen() {
         <Text style={styles.resultsText}>
           {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'}
         </Text>
-        {hasFilters && (
+        {/* With no results, the empty state below carries the only "Clear filters" button. */}
+        {hasFilters && filteredItems.length > 0 && (
           <TouchableOpacity onPress={clearFilters} accessibilityRole="button" hitSlop={8}>
             <Text style={styles.clearText}>Clear filters</Text>
           </TouchableOpacity>
@@ -212,7 +223,7 @@ export default function DiscoverScreen() {
     <View style={styles.container}>
       <ScreenHeader
         title="Discover"
-        subtitle={isProfileComplete && vibeSummary ? vibeSummary : 'Live deals from Flipkart and pre-owned finds from eBay.'}
+        subtitle={isProfileComplete && vibeSummary ? vibeSummary : 'Live prices from real marketplaces, ranked for you.'}
       >
         <View style={styles.searchContainer}>
           <Ionicons name="search" size={16} color={Colors.textMuted} />
@@ -254,7 +265,7 @@ export default function DiscoverScreen() {
             <EmptyState
               icon="search-outline"
               title="No items match your filters"
-              message="Try a different search, category, platform or region."
+              message="Try a different search, category, marketplace or condition."
               actionLabel="Clear filters"
               onAction={clearFilters}
             />
@@ -276,7 +287,8 @@ interface DiscoverCardProps {
 const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, showMatch, onPress, onToggleWishlist }: DiscoverCardProps) {
   const dealScore = getDealScore(item);
   const savings = percentOff(item.currentPrice, item.originalPrice);
-  const dropsSoon = item.predictedPrice7d !== null && item.predictedPrice7d < item.currentPrice * 0.99;
+  const advice = getBuyAdvice(item);
+  const recordLow = isAtRecordLow(item);
   const matchGradient =
     item.matchScore >= 80 ? Colors.gradientEco : item.matchScore >= 60 ? Colors.gradientPrimary : Colors.gradientAccent;
 
@@ -326,8 +338,8 @@ const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, show
           </View>
         )}
 
-        <View style={[styles.platformTag, { backgroundColor: PLATFORM_COLORS[item.platform] || Colors.primary }]}>
-          <Text style={styles.platformText}>{item.platform}</Text>
+        <View style={[styles.platformTag, { backgroundColor: PLATFORM_COLORS[item.source] || Colors.primary }]}>
+          <Text style={styles.platformText}>{item.source === 'google_shopping' && item.seller ? item.seller : item.siteName}</Text>
         </View>
       </View>
 
@@ -353,27 +365,27 @@ const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, show
             )}
           </View>
           <View style={styles.metricsRow}>
-            <Text style={styles.metric} accessibilityLabel={`Eco score ${item.sustainabilityScore}`}>
-              🌿 {item.sustainabilityScore}
-            </Text>
             <Text style={styles.metric} accessibilityLabel={`Deal score ${dealScore}`}>
               🔥 {dealScore}
             </Text>
-            {item.secondhand && (
-              <Text style={styles.metric} accessibilityLabel={`About ${item.co2Saved} kilograms of CO2 saved`}>
-                💨 ~{item.co2Saved}kg
-              </Text>
-            )}
+            {item.secondhand && <Text style={styles.metric}>♻️ Pre-owned</Text>}
           </View>
         </View>
 
-        {dropsSoon && item.predictedPrice7d !== null && (
-          <View style={styles.predictionHint}>
+        {(recordLow || advice) && (
+          <View style={[styles.predictionHint, advice?.verdict === 'buy' || recordLow ? styles.hintBuy : null]}>
             <Text style={styles.predictionText}>
-              📉 Recorded prices trend down — about {formatMoney(item.predictedPrice7d, item.currency)} expected within 7 days
+              {recordLow
+                ? '🏷️ Lowest price recorded for this listing'
+                : advice?.verdict === 'wait'
+                  ? `⏳ ${Math.round(advice.pDrop * 100)}% chance it gets ≥5% cheaper within ${advice.horizon} days`
+                  : advice?.verdict === 'buy'
+                    ? `🟢 Buy now — only ${Math.round(advice.pDrop * 100)}% chance of a 5%+ drop in ${advice.horizon} days`
+                    : `⚖️ ${Math.round(advice!.pDrop * 100)}% chance of a 5%+ drop in ${advice!.horizon} days`}
             </Text>
           </View>
         )}
+        {showMatch && item.matchReasons[0] && <Text style={styles.reasonText}>✓ {item.matchReasons.slice(0, 2).join(' · ')}</Text>}
       </View>
     </TouchableOpacity>
   );
@@ -491,4 +503,6 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.sm,
   },
   predictionText: { color: Colors.primaryLight, fontSize: FontSize.xs },
+  hintBuy: { backgroundColor: Colors.success + '25' },
+  reasonText: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: Spacing.sm },
 });

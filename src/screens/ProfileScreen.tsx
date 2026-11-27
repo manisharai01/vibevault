@@ -1,11 +1,12 @@
 // ============================================================
 // VibeVault – Profile Screen
 //
-// Level progress, eco-impact dashboard (from logged purchases),
-// badge collection, quick stats and data controls.
+// Name, wishlist, level progress, shopping settings (country,
+// currency, sections), shopping impact from logged purchases,
+// badges, quick stats and data controls.
 // ============================================================
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Modal,
   ScrollView,
@@ -17,22 +18,24 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useNavigation } from '@react-navigation/native';
+import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useShallow } from 'zustand/react/shallow';
-import { BorderRadius, Colors, FontSize, STYLE_COLORS, Spacing } from '../constants/theme';
+import { BorderRadius, Colors, FontSize, Spacing } from '../constants/theme';
 import { BADGES } from '../data/content';
+import { COUNTRIES, countryFlag, countryName } from '../data/countries';
+import { SHOP_FOR_LABELS } from '../constants/marketplaces';
 import { useLevelInfo, useSustainability } from '../store/hooks';
 import { MAX_NAME_LENGTH } from '../store/persistence';
 import { useStore } from '../store/useStore';
-import { Badge, BadgeRarity } from '../types';
+import { Badge, BadgeRarity, ShopFor } from '../types';
 import { ProfileStackParamList } from '../navigation/types';
 import GradientCard from '../components/common/GradientCard';
 import ProgressBar from '../components/common/ProgressBar';
 import { confirmAction, notify } from '../utils/dialog';
 import { formatDate } from '../utils/date';
-import { formatInr, formatMoney, formatNumber } from '../utils/format';
+import { formatMoney, formatMoneyWhole, formatNumber } from '../utils/format';
 
 const RARITY_COLORS: Record<BadgeRarity, string> = {
   legendary: Colors.warning,
@@ -45,18 +48,39 @@ const initialOf = (name: string) => (Array.from(name.trim())[0] ?? 'V').toUpperC
 
 export default function ProfileScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<ProfileStackParamList, 'ProfileMain'>>();
+  const route = useRoute<RouteProp<ProfileStackParamList, 'ProfileMain'>>();
   const insets = useSafeAreaInsets();
-  const { profile, isProfileComplete, vibeSummary, purchases, streak, setName, resetAllData } = useStore(
-    useShallow((s) => ({
-      profile: s.profile,
-      isProfileComplete: s.isProfileComplete,
-      vibeSummary: s.vibeSummary,
-      purchases: s.purchases,
-      streak: s.streak,
-      setName: s.setName,
-      resetAllData: s.resetAllData,
-    })),
-  );
+  const { profile, isProfileComplete, purchases, streak, setName, resetAllData, setCountry, setCurrency, setShopFor, fxRates, availableMarkets, marketplaces } =
+    useStore(
+      useShallow((s) => ({
+        profile: s.profile,
+        isProfileComplete: s.isProfileComplete,
+        purchases: s.purchases,
+        streak: s.streak,
+        setName: s.setName,
+        resetAllData: s.resetAllData,
+        setCountry: s.setCountry,
+        setCurrency: s.setCurrency,
+        setShopFor: s.setShopFor,
+        fxRates: s.fxRates,
+        availableMarkets: s.availableMarkets,
+        marketplaces: s.marketplaces,
+      })),
+    );
+  const [picker, setPicker] = useState<'country' | 'currency' | null>(null);
+  // Other screens can open the country picker (e.g. Deals → coupons need a country).
+  const requestedPicker = route.params?.pick;
+  useEffect(() => {
+    if (requestedPicker) {
+      setPicker(requestedPicker);
+      navigation.setParams({ pick: undefined });
+    }
+  }, [requestedPicker, navigation]);
+  const liveCountries = new Set(availableMarkets.map((m) => m.market));
+  const countryOptions = [...COUNTRIES].sort((a, b) => Number(liveCountries.has(b.code)) - Number(liveCountries.has(a.code)) || a.name.localeCompare(b.name));
+  // Currencies the ECB publishes rates for (conversions need a rate), plus the user's own.
+  const currencyOptions = [...new Set([profile.currency, ...Object.keys(fxRates ?? { EUR: 1 })])].sort();
+  const attributions = marketplaces.filter((m) => m.availableListings > 0).map((m) => m.attribution).filter((a): a is string => !!a);
   const level = useLevelInfo();
   const sustainability = useSustainability();
 
@@ -155,35 +179,58 @@ export default function ProfileScreen() {
         <ProgressBar progress={level.progress} height={10} gradient={Colors.gradientPrimary} accessibilityLabel="Level progress" />
       </GradientCard>
 
+      <GradientCard style={styles.section}>
+        <Text style={styles.sectionTitle}>🧭 Shopping Settings</Text>
+        <TouchableOpacity style={styles.settingRow} onPress={() => setPicker('country')} accessibilityRole="button">
+          <Text style={styles.settingLabel}>Country</Text>
+          <Text style={styles.settingValue}>{profile.country ? `${countryFlag(profile.country)} ${countryName(profile.country)}` : 'Choose'} ›</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.settingRow} onPress={() => setPicker('currency')} accessibilityRole="button">
+          <Text style={styles.settingLabel}>Currency for totals & budget</Text>
+          <Text style={styles.settingValue}>{profile.currency} ›</Text>
+        </TouchableOpacity>
+        <View style={styles.settingRow}>
+          <Text style={styles.settingLabel}>Sections</Text>
+          <View style={styles.segment}>
+            {(['women', 'men', 'all'] as ShopFor[]).map((option) => (
+              <TouchableOpacity
+                key={option}
+                style={[styles.segmentBtn, (profile.shopFor ?? 'all') === option && styles.segmentBtnActive]}
+                onPress={() => setShopFor(option)}
+                accessibilityRole="radio"
+                aria-checked={(profile.shopFor ?? 'all') === option}
+              >
+                <Text style={styles.segmentText}>{option === 'all' ? 'Both' : SHOP_FOR_LABELS[option]}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </GradientCard>
+
       <GradientCard style={styles.section} gradient={Colors.gradientEco}>
-        <Text style={styles.sectionTitleLight}>🌍 Your Eco Impact</Text>
+        <Text style={styles.sectionTitleLight}>🛍️ Your Shopping Impact</Text>
         <View style={styles.ecoGrid}>
           <View style={styles.ecoItem}>
-            <Text style={styles.ecoValue}>{sustainability.totalCO2Saved.toFixed(1)}</Text>
-            <Text style={styles.ecoUnit}>kg CO₂</Text>
-            <Text style={styles.ecoLabel}>Saved</Text>
+            <Text style={styles.ecoValue}>{sustainability.purchases}</Text>
+            <Text style={styles.ecoUnit}>logged</Text>
+            <Text style={styles.ecoLabel}>Purchases</Text>
           </View>
           <View style={styles.ecoItem}>
             <Text style={styles.ecoValue}>{sustainability.itemsThrifted}</Text>
-            <Text style={styles.ecoUnit}>items</Text>
-            <Text style={styles.ecoLabel}>Thrifted</Text>
+            <Text style={styles.ecoUnit}>pre-owned</Text>
+            <Text style={styles.ecoLabel}>Second-hand finds</Text>
           </View>
           <View style={styles.ecoItem}>
-            <Text style={styles.ecoValue}>{formatNumber(sustainability.waterSavedLiters)}</Text>
-            <Text style={styles.ecoUnit}>litres</Text>
-            <Text style={styles.ecoLabel}>Water Saved</Text>
-          </View>
-          <View style={styles.ecoItem}>
-            <Text style={styles.ecoValue}>{formatInr(sustainability.moneySavedInr)}</Text>
-            <Text style={styles.ecoUnit}>vs MRP / retail</Text>
+            <Text style={styles.ecoValue}>{formatMoneyWhole(sustainability.moneySaved, sustainability.currency)}</Text>
+            <Text style={styles.ecoUnit}>vs list price</Text>
             <Text style={styles.ecoLabel}>Money Saved</Text>
           </View>
         </View>
         <View style={styles.treesRow}>
           <Text style={styles.treesText}>
             {sustainability.itemsThrifted > 0
-              ? `🌳 That's the CO₂ ${sustainability.treesEquivalent} trees absorb in a year!`
-              : '🌱 Log a purchase from any item page to start tracking your impact.'}
+              ? `♻️ ${sustainability.itemsThrifted} garment${sustainability.itemsThrifted === 1 ? '' : 's'} kept in use instead of new ones being made.`
+              : '🌱 Log a purchase from any item page to start tracking what you save.'}
           </Text>
         </View>
       </GradientCard>
@@ -203,7 +250,7 @@ export default function ProfileScreen() {
                   {p.title}
                 </Text>
                 <Text style={styles.purchaseMeta}>
-                  {p.platform} · {formatDate(p.purchasedAt)} · {p.secondhand ? `${p.co2Saved} kg CO₂ saved` : 'new'}
+                  {p.platform} · {formatDate(p.purchasedAt)} · {p.secondhand ? 'pre-owned' : 'new'}
                 </Text>
               </View>
               <Text style={styles.purchasePrice}>{formatMoney(p.pricePaid, p.currency)}</Text>
@@ -241,20 +288,7 @@ export default function ProfileScreen() {
         </View>
       </GradientCard>
 
-      {isProfileComplete && vibeSummary ? (
-        <GradientCard style={styles.section}>
-          <Text style={styles.sectionTitle}>✨ Your Vibe</Text>
-          <Text style={styles.vibeSummaryText}>{vibeSummary}</Text>
-          <View style={styles.archetypeTags}>
-            {profile.styleArchetypes.map((arch) => (
-              <View key={arch} style={[styles.archetypeTag, { backgroundColor: (STYLE_COLORS[arch] || Colors.primary) + '30' }]}>
-                <Text style={[styles.archetypeTagText, { color: STYLE_COLORS[arch] || Colors.primary }]}>{arch}</Text>
-              </View>
-            ))}
-          </View>
-        </GradientCard>
-      ) : null}
-
+      {/* Wishlist and badge counts are already shown above (Wishlist button, Badge Collection). */}
       <GradientCard style={styles.section}>
         <Text style={styles.sectionTitle}>📊 Quick Stats</Text>
         <View style={styles.quickGrid}>
@@ -263,16 +297,12 @@ export default function ProfileScreen() {
             <Text style={styles.quickLabel}>Quests Done</Text>
           </View>
           <View style={styles.quickItem}>
-            <Text style={styles.quickValue}>{profile.wishlist.length}</Text>
-            <Text style={styles.quickLabel}>Wishlisted</Text>
-          </View>
-          <View style={styles.quickItem}>
-            <Text style={styles.quickValue}>{earnedCount}</Text>
-            <Text style={styles.quickLabel}>Badges</Text>
-          </View>
-          <View style={styles.quickItem}>
             <Text style={styles.quickValue}>🔥 {streak.current}</Text>
             <Text style={styles.quickLabel}>Day Streak</Text>
+          </View>
+          <View style={styles.quickItem}>
+            <Text style={styles.quickValue}>{streak.longest}</Text>
+            <Text style={styles.quickLabel}>Best Streak</Text>
           </View>
         </View>
       </GradientCard>
@@ -282,6 +312,55 @@ export default function ProfileScreen() {
         <Text style={styles.resetText}>Reset all data</Text>
       </TouchableOpacity>
       <Text style={styles.privacyText}>Your profile, wishlist, alerts and purchases are stored only on this device.</Text>
+      <Text style={styles.privacyText}>
+        Prices come from each marketplace’s official API (Google Shopping results via SerpApi) and are recorded daily; exchange rates are the
+        European Central Bank’s. Links to stores may be affiliate links, which can earn VibeVault a commission at no cost to you.
+        {attributions.length ? ` ${attributions.join(' ')}` : ''}
+      </Text>
+
+      <Modal visible={picker !== null} transparent animationType="fade" onRequestClose={() => setPicker(null)}>
+        <View style={[styles.modalBackdrop, { paddingTop: insets.top + 48 }]}>
+          <View style={[styles.modalCard, styles.pickerCard]}>
+            <Text style={styles.modalTitle}>{picker === 'country' ? 'Where do you shop?' : 'Currency'}</Text>
+            <ScrollView style={styles.pickerList}>
+              {picker === 'country'
+                ? countryOptions.map((c) => (
+                    <TouchableOpacity
+                      key={c.code}
+                      style={styles.pickerRow}
+                      onPress={() => {
+                        setCountry(c.code);
+                        setPicker(null);
+                      }}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.pickerText}>
+                        {countryFlag(c.code)} {c.name}
+                      </Text>
+                      {liveCountries.has(c.code) && <Text style={styles.pickerLive}>live prices</Text>}
+                    </TouchableOpacity>
+                  ))
+                : currencyOptions.map((code) => (
+                    <TouchableOpacity
+                      key={code}
+                      style={styles.pickerRow}
+                      onPress={() => {
+                        setCurrency(code);
+                        setPicker(null);
+                      }}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.pickerText}>{code}</Text>
+                      {code === profile.currency && <Text style={styles.pickerLive}>current</Text>}
+                    </TouchableOpacity>
+                  ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.modalBtn} onPress={() => setPicker(null)} accessibilityRole="button">
+              <Text style={styles.modalBtnText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={editingName} transparent animationType="fade" onRequestClose={() => setEditingName(false)}>
         {/* Anchored near the top so the on-screen keyboard can never cover it. */}
@@ -321,6 +400,33 @@ export default function ProfileScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+    gap: Spacing.md,
+  },
+  settingLabel: { color: Colors.textSecondary, fontSize: FontSize.sm },
+  settingValue: { color: Colors.textPrimary, fontSize: FontSize.sm, fontWeight: '700' },
+  segment: { flexDirection: 'row', backgroundColor: Colors.surface, borderRadius: BorderRadius.full, padding: 2 },
+  segmentBtn: { paddingHorizontal: Spacing.sm, paddingVertical: 4, borderRadius: BorderRadius.full },
+  segmentBtnActive: { backgroundColor: Colors.primaryDark },
+  segmentText: { color: Colors.textPrimary, fontSize: FontSize.xs, fontWeight: '700' },
+  pickerCard: { maxHeight: '80%' },
+  pickerList: { marginVertical: Spacing.md },
+  pickerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: Spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  pickerText: { color: Colors.textPrimary, fontSize: FontSize.md },
+  pickerLive: { color: Colors.success, fontSize: FontSize.xs, fontWeight: '700' },
   header: { paddingBottom: Spacing.xl, paddingHorizontal: Spacing.xl },
   profileRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.lg },
   avatar: { width: 72, height: 72, borderRadius: 36, alignItems: 'center', justifyContent: 'center' },
@@ -366,7 +472,8 @@ const styles = StyleSheet.create({
   xpValue: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
   xpPoints: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.primaryLight },
 
-  ecoGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  // Three figures: two on the first row, the third centred below.
+  ecoGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-around' },
   ecoItem: { width: '48%', alignItems: 'center', paddingVertical: Spacing.md },
   ecoValue: { fontSize: FontSize.xxl, fontWeight: '800', color: '#FFF' },
   ecoUnit: { fontSize: FontSize.xs, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
@@ -397,10 +504,6 @@ const styles = StyleSheet.create({
   rarityBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: BorderRadius.full, marginTop: 4 },
   rarityText: { color: '#FFF', fontSize: 8, fontWeight: '700', textTransform: 'uppercase' },
 
-  vibeSummaryText: { fontSize: FontSize.md, color: Colors.textSecondary, lineHeight: 22, marginBottom: Spacing.md },
-  archetypeTags: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
-  archetypeTag: { paddingHorizontal: Spacing.md, paddingVertical: Spacing.xs, borderRadius: BorderRadius.full },
-  archetypeTagText: { fontWeight: '700', fontSize: FontSize.sm },
 
   quickGrid: { flexDirection: 'row', justifyContent: 'space-between' },
   quickItem: { alignItems: 'center', flex: 1 },

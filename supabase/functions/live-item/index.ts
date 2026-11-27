@@ -1,6 +1,6 @@
 // Edge Function: live-item
-// POST { "id": "<source>:<itemId>" } → the listing with its price re-checked on the
-// marketplace (at most once every 15 minutes per listing).
+// POST { "id": "<source>:<market>:<itemId>" } → the listing with its price re-checked on
+// the marketplace (at most once every 15 minutes per listing).
 
 import { buildDb, buildProviders, CORS_HEADERS, jsonResponse } from '../_shared/context.ts';
 import { liveItemCheck } from '../_shared/liveItem.ts';
@@ -19,10 +19,7 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const result = await liveItemCheck(
-      { db: buildDb(env, fetch), providers: buildProviders(env, fetch), now: () => new Date() },
-      id,
-    );
+    const result = await liveItemCheck({ db: buildDb(env, fetch), providers: buildProviders(env, fetch), now: () => new Date() }, id);
     return jsonResponse(result.status, result.body);
   } catch (error) {
     console.error('live-item failed', error);

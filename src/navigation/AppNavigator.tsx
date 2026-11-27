@@ -127,7 +127,7 @@ export default function AppNavigator() {
     >
       <Tab.Screen name="Discover" component={DiscoverStackNav} options={{ tabBarLabel: 'Discover' }} />
       <Tab.Screen name="Profiler" component={ProfilerScreen} options={{ tabBarLabel: 'My Vibe' }} />
-      <Tab.Screen name="Compose" component={ComposeStackNav} options={{ tabBarLabel: 'Compose' }} />
+      <Tab.Screen name="Compose" component={ComposeStackNav} options={{ tabBarLabel: 'Stylist' }} />
       <Tab.Screen
         name="Prices"
         component={DealsStackNav}

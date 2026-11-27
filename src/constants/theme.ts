@@ -104,17 +104,14 @@ export const STYLE_COLORS: Record<string, string> = {
   Y2K: '#FF79C6',
 };
 
+/** Brand colour of each marketplace (by source id), for the small platform tags. */
 export const PLATFORM_COLORS: Record<string, string> = {
-  Flipkart: '#2874F0',
-  eBay: '#E53238',
-  Depop: '#FF2300',
-  Poshmark: '#7B2E8D',
-  Vinted: '#09B1BA',
-  ThredUp: '#3D9B35',
-  Myntra: '#FF3F6C',
-  Meesho: '#6E38E0',
-  Amazon: '#FF9900',
-  Ajio: '#2C4152',
+  flipkart: '#2874F0',
+  amazon: '#FF9900',
+  ebay: '#E53238',
+  etsy: '#F1641E',
+  aliexpress: '#E62E04',
+  google_shopping: '#4285F4',
 };
 
 /** Text colour that stays readable on top of a style/platform colour chip. */

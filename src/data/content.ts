@@ -43,7 +43,7 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Complete your Style Profile',
       'Save 5 items that match your vibe to your wishlist',
       'Include at least 2 different categories',
-      'Build a look in the Wardrobe Composer',
+      'Build a look with the Stylist',
       'Share your look with a friend',
     ],
     helperAction: 'open-composer',

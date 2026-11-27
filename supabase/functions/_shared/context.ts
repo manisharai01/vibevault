@@ -1,38 +1,30 @@
-// Builds the database client and marketplace providers from environment variables.
+// Builds the database client and the configured marketplaces, archives and coupon feeds
+// from environment variables.
 
 import { createDb, type Db } from './db.ts';
-import { createEbayProvider } from './ebay.ts';
-import { createFlipkartProvider } from './flipkart.ts';
-import type { ProviderSlot } from './refresh.ts';
-import type { FetchLike, Source } from './types.ts';
+import { OFFER_SOURCES } from './offers/index.ts';
+import { ARCHIVES, PROVIDERS } from './providers/index.ts';
+import type {
+  EnvGetter,
+  FetchLike,
+  HistoryProvider,
+  MarketplaceProvider,
+  OfferProvider,
+  Slot,
+} from './types.ts';
 
-export type EnvGetter = (key: string) => string | undefined;
+export type { EnvGetter } from './types.ts';
 
-export function buildProviders(env: EnvGetter, fetch: FetchLike): Record<Source, ProviderSlot> {
-  const flipkartId = env('FLIPKART_AFFILIATE_ID')?.trim();
-  const flipkartToken = env('FLIPKART_AFFILIATE_TOKEN')?.trim();
-  const ebayId = env('EBAY_CLIENT_ID')?.trim();
-  const ebaySecret = env('EBAY_CLIENT_SECRET')?.trim();
+export function buildProviders(env: EnvGetter, fetch: FetchLike): Record<string, Slot<MarketplaceProvider>> {
+  return Object.fromEntries(PROVIDERS.map((definition) => [definition.source, definition.create(env, fetch)]));
+}
 
-  return {
-    flipkart:
-      flipkartId && flipkartToken
-        ? createFlipkartProvider({ affiliateId: flipkartId, token: flipkartToken }, fetch)
-        : { missing: 'Flipkart is not connected: set FLIPKART_AFFILIATE_ID and FLIPKART_AFFILIATE_TOKEN.' },
-    ebay:
-      ebayId && ebaySecret
-        ? createEbayProvider(
-            {
-              clientId: ebayId,
-              clientSecret: ebaySecret,
-              marketplaceId: env('EBAY_MARKETPLACE_ID')?.trim() || 'EBAY_US',
-              deliveryCountry: (env('EBAY_DELIVERY_COUNTRY')?.trim() || 'IN').toUpperCase(),
-              campaignId: env('EBAY_CAMPAIGN_ID')?.trim() || undefined,
-            },
-            fetch,
-          )
-        : { missing: 'eBay is not connected: set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET.' },
-  };
+export function buildOfferSources(env: EnvGetter, fetch: FetchLike): Record<string, Slot<OfferProvider>> {
+  return Object.fromEntries(OFFER_SOURCES.map((definition) => [definition.network, definition.create(env, fetch)]));
+}
+
+export function buildArchives(env: EnvGetter, fetch: FetchLike): Slot<HistoryProvider>[] {
+  return ARCHIVES.map((definition) => definition.create(env, fetch));
 }
 
 export function buildDb(env: EnvGetter, fetch: FetchLike): Db {
