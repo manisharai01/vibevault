@@ -70,7 +70,8 @@ describe('migrations', () => {
              ('ebay:v1|9|0', 'ebay', 'v1|9|0', 'Jacket', 'https://e/9', 'Outerwear', 'Good', 'Global', 'USD', 20, false);
       insert into price_points values ('flipkart:ABC', '2026-11-25', 1099, 'INR'), ('flipkart:ABC', '2026-11-26', 999, 'INR');
     `);
-    await db.exec(readFileSync(new URL(migrationFiles.at(-1)!, MIGRATIONS), 'utf8'));
+    // Apply the global-catalogue migration (and everything after it) to the old data.
+    for (const file of migrationFiles.filter((name) => name >= '20261127')) await db.exec(readFileSync(new URL(file, MIGRATIONS), 'utf8'));
     const listings = await rows<{ id: string; market: string; end_reason: string | null }>(
       db,
       'select id, market, end_reason from listings order by id',
@@ -377,18 +378,71 @@ describe('price model', () => {
   });
 });
 
+describe('when to buy', () => {
+  let db: PGlite;
+  const ASOF = "date '2026-11-04'";
+
+  before(async () => {
+    db = await freshDb();
+    const coats = Array.from({ length: 12 }, (_, i) => listingRow(`ebay:US:coat${i}`, { category: 'Outerwear' }));
+    const solo = listingRow('ebay:US:solo', { category: 'Outerwear' });
+    await db.query(`select ingest_listings($1::jsonb, date '2026-11-04')`, [JSON.stringify([...coats, solo])]);
+    // ~13 months of daily prices: 100, except 80 throughout December.
+    await db.exec(`
+      delete from price_points;
+      insert into price_points (listing_id, observed_on, price, currency)
+      select l.id, date '2025-10-01' + d, case when extract(month from date '2025-10-01' + d) = 12 then 80 else 100 end, 'USD'
+      from listings l cross join generate_series(0, 399) as d
+      where l.id like 'ebay:US:coat%';
+      insert into price_points (listing_id, observed_on, price, currency)
+      select 'ebay:US:solo', date '2026-07-28' + d, 100, 'USD' from generate_series(0, 99) as d;
+    `);
+  });
+
+  it('learns the yearly pattern per listing and per category, with enough listings behind it', async () => {
+    const result = await one<{ r: Record<string, number> }>(db, `select compute_seasonality(${ASOF}) as r`);
+    assert.deepEqual(result.r, { listing_months: 144, category_months: 12, marketplace_months: 0 });
+    const dec = await one<{ ratio: string; listings: number }>(db, `select ratio, listings from season_profiles where level = 'category' and month = 12`);
+    assert.equal(Number(dec.ratio), 0.8);
+    assert.equal(dec.listings, 12);
+    const jun = await one<{ ratio: string }>(db, `select ratio from season_profiles where level = 'category' and month = 6`);
+    assert.equal(Number(jun.ratio), 1);
+  });
+
+  it('gives each listing its most specific pattern in catalog_items', async () => {
+    const own = await one<{ season: { basis: string; listings: number; months: Record<string, number> } }>(db, `select season from catalog_items where id = 'ebay:US:coat0'`);
+    assert.equal(own.season.basis, 'listing');
+    assert.equal(Number(own.season.months['12']), 0.8);
+    const solo = await one<{ season: { basis: string; listings: number; months: Record<string, number> } }>(db, `select season from catalog_items where id = 'ebay:US:solo'`);
+    assert.equal(solo.season.basis, 'category');
+    assert.equal(solo.season.listings, 12);
+    assert.equal(Number(solo.season.months['12']), 0.8);
+  });
+
+  it('lists sales announced within 90 days as upcoming, not as coupons', async () => {
+    const soon = new Date(Date.now() + 10 * 86_400_000).toISOString();
+    const later = new Date(Date.now() + 200 * 86_400_000).toISOString();
+    const offer = (id: string, starts: string) => ({ network_offer_id: id, merchant: 'eBay', merchant_domain: 'ebay.com', title: `Sale ${id}`, url: `https://www.ebay.com/sale/${id}`, starts_at: starts, ends_at: null, categories: [] });
+    await db.query(`select store_offers('awin', 'US', $1::jsonb)`, [JSON.stringify([offer('soon', soon), offer('later', later)])]);
+    const upcoming = (await rows<{ id: string; source: string }>(db, `select id, source from upcoming_offers`)).map((o) => `${o.id}|${o.source}`);
+    assert.deepEqual(upcoming, ['awin:US:soon|ebay']);
+    assert.equal((await rows(db, `select id from active_offers`)).length, 0);
+  });
+});
+
 describe('access', () => {
   it('lets the app read the catalogue but nothing else', async () => {
     const db = await freshDb();
     await db.query(`select ingest_listings($1::jsonb, '2026-02-01')`, [JSON.stringify([listingRow('ebay:US:1')])]);
     await db.exec('set role anon');
     assert.equal((await rows(db, 'select id from catalog_items')).length, 1);
-    for (const view of ['catalog_status', 'available_markets', 'fx_latest', 'active_offers', 'prediction_track_record', 'prediction_calibration', 'model_status']) {
+    for (const view of ['catalog_status', 'available_markets', 'fx_latest', 'active_offers', 'upcoming_offers', 'season_profiles', 'prediction_track_record', 'prediction_calibration', 'model_status']) {
       await rows(db, `select * from ${view}`);
     }
     await assert.rejects(rows(db, 'select * from search_terms'), /permission denied/);
     await assert.rejects(rows(db, `select ingest_listings('[]'::jsonb)`), /permission denied/);
     await assert.rejects(rows(db, `select run_price_model()`), /permission denied/);
+    await assert.rejects(rows(db, `select compute_seasonality()`), /permission denied/);
     await assert.rejects(db.exec(`update listings set current_price = 1`), /permission denied/);
     await db.exec('reset role');
   });

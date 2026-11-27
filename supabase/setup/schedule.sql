@@ -36,9 +36,9 @@ select cron.schedule(
   $$
 );
 
--- Daily at 23:40 UTC: score old predictions, relearn from every recorded outcome and publish
--- today's predictions (runs inside the database; no function call needed).
-select cron.schedule('vibevault-price-model', '40 23 * * *', $$ select public.run_price_model(current_date); $$);
+-- Daily at 23:40 UTC: score old predictions, relearn from every recorded outcome, publish
+-- today's predictions and relearn the yearly price patterns (runs inside the database).
+select cron.schedule('vibevault-price-model', '40 23 * * *', $$ select public.run_price_model(current_date); select public.compute_seasonality(current_date); $$);
 
 -- Check the jobs:     select * from cron.job;
 -- Recent refreshes:   select * from public.refresh_runs order by started_at desc limit 20;

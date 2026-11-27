@@ -9,7 +9,7 @@
 import React, { useState } from 'react';
 import { LayoutChangeEvent, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Defs, Line, LinearGradient as SvgGradient, Path, Stop } from 'react-native-svg';
-import { Colors, FontSize, Spacing } from '../../constants/theme';
+import { Colors, Fonts, FontSize, Spacing } from '../../constants/theme';
 import { PricePoint } from '../../types';
 import { formatDate, formatShortDate } from '../../utils/date';
 import { formatMoney, formatMoneyWhole } from '../../utils/format';
@@ -94,8 +94,8 @@ export default function PriceChart({ history, currency, expectedLow = null, expe
           <Svg width={width} height={svgHeight}>
             <Defs>
               <SvgGradient id="historyFill" x1="0" y1="0" x2="0" y2="1">
-                <Stop offset="0" stopColor={Colors.primary} stopOpacity="0.35" />
-                <Stop offset="1" stopColor={Colors.primary} stopOpacity="0.01" />
+                <Stop offset="0" stopColor={Colors.ink} stopOpacity="0.10" />
+                <Stop offset="1" stopColor={Colors.ink} stopOpacity="0.0" />
               </SvgGradient>
             </Defs>
 
@@ -105,20 +105,20 @@ export default function PriceChart({ history, currency, expectedLow = null, expe
 
             {segments(history).map((seg, i) => {
               const pts = seg.map((p) => ({ x: x(p.date), y: y(p.price) }));
-              if (pts.length < 2) return <Circle key={i} cx={pts[0].x} cy={pts[0].y} r="2" fill={Colors.primary} />;
+              if (pts.length < 2) return <Circle key={i} cx={pts[0].x} cy={pts[0].y} r="2" fill={Colors.ink} />;
               return (
                 <React.Fragment key={i}>
                   <Path d={`${linePath(pts)} L ${pts[pts.length - 1].x.toFixed(1)} ${bottomY} L ${pts[0].x.toFixed(1)} ${bottomY} Z`} fill="url(#historyFill)" />
-                  <Path d={linePath(pts)} fill="none" stroke={Colors.primary} strokeWidth="2.2" strokeLinejoin="round" />
+                  <Path d={linePath(pts)} fill="none" stroke={Colors.ink} strokeWidth="2" strokeLinejoin="round" />
                 </React.Fragment>
               );
             })}
 
             {expectedLow !== null && (
-              <Line x1={PAD.left} y1={y(expectedLow)} x2={width - PAD.right} y2={y(expectedLow)} stroke={Colors.accent} strokeWidth="1.5" strokeDasharray="6,4" />
+              <Line x1={PAD.left} y1={y(expectedLow)} x2={width - PAD.right} y2={y(expectedLow)} stroke={Colors.wait} strokeWidth="1.5" strokeDasharray="6,4" />
             )}
-            <Circle cx={x(lowest.date)} cy={y(lowest.price)} r="4" fill={Colors.success} />
-            <Circle cx={x(latest.date)} cy={y(latest.price)} r="5" fill={Colors.primary} />
+            <Circle cx={x(lowest.date)} cy={y(lowest.price)} r="4" fill={Colors.buy} />
+            <Circle cx={x(latest.date)} cy={y(latest.price)} r="5" fill={Colors.ink} />
             <Circle cx={x(latest.date)} cy={y(latest.price)} r="3" fill="#fff" />
           </Svg>
 
@@ -136,13 +136,13 @@ export default function PriceChart({ history, currency, expectedLow = null, expe
           </View>
 
           <View style={styles.legend}>
-            <View style={[styles.legendLine, { backgroundColor: Colors.primary }]} />
+            <View style={[styles.legendLine, { backgroundColor: Colors.ink }]} />
             <Text style={styles.legendText}>Recorded</Text>
-            <View style={[styles.legendDot, { backgroundColor: Colors.success, marginLeft: Spacing.md }]} />
+            <View style={[styles.legendDot, { backgroundColor: Colors.buy, marginLeft: Spacing.md }]} />
             <Text style={styles.legendText}>Lowest</Text>
             {expectedLow !== null && (
               <>
-                <View style={[styles.legendLine, { backgroundColor: Colors.accent, marginLeft: Spacing.md }]} />
+                <View style={[styles.legendLine, { backgroundColor: Colors.wait, marginLeft: Spacing.md }]} />
                 <Text style={styles.legendText}>{expectedLowLabel}</Text>
               </>
             )}
@@ -158,12 +158,12 @@ export default function PriceChart({ history, currency, expectedLow = null, expe
 const styles = StyleSheet.create({
   container: { marginVertical: Spacing.sm },
   noPointer: { pointerEvents: 'none' },
-  noData: { color: Colors.textMuted, fontSize: FontSize.sm, paddingVertical: Spacing.lg, textAlign: 'center' },
-  yLabel: { position: 'absolute', left: 0, width: 48, color: Colors.textMuted, fontSize: 9, textAlign: 'right' },
+  noData: { fontFamily: Fonts.regular, color: Colors.textMuted, fontSize: FontSize.sm, paddingVertical: Spacing.lg, textAlign: 'center' },
+  yLabel: { position: 'absolute', left: 0, width: 48, fontFamily: Fonts.regular, color: Colors.textMuted, fontSize: 10, textAlign: 'right' },
   dateRow: { height: 16, marginTop: 2 },
-  dateText: { position: 'absolute', top: 0, color: Colors.textMuted, fontSize: FontSize.xs },
+  dateText: { position: 'absolute', top: 0, fontFamily: Fonts.regular, color: Colors.textMuted, fontSize: FontSize.xs },
   legend: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: Spacing.sm, gap: 4, flexWrap: 'wrap' },
   legendLine: { width: 16, height: 2.5, borderRadius: 2 },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: { color: Colors.textSecondary, fontSize: FontSize.xs, marginRight: 4 },
+  legendText: { fontFamily: Fonts.regular, color: Colors.textSecondary, fontSize: FontSize.xs, marginRight: 4 },
 });

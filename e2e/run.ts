@@ -119,7 +119,13 @@ function untappedControls(h: Harness): string[] {
   const fold = (name: string) =>
     name
       .trim()
-      .replace(/^(Category|Marketplace|Condition|Occasion|Style): .+/, '$1: <option>')
+      .replace(/^(Category|Marketplace|Shop|Condition|Occasion|Style|Sort|Kind|Colour): .+/, '$1: <option>')
+      .replace(/^Alert at .+/, 'Alert at <price>')
+      .replace(/^Display name .+. Tap to edit.$/, 'Display name <name>. Tap to edit.')
+      .replace(/^I own one like .+/, 'I own one like <item>')
+      .replace(/^Remove .+ from your wardrobe$/, 'Remove <piece> from your wardrobe')
+      .replace(/^Add .+ you own$/, 'Add <kind> you own')
+      .replace(/^.+, (no longer available, )?(Buy now|Wait .+|Sale starts .+|No clear signal yet|Too close to call|Usually cheaper .+|No longer for sale)$/, '<wishlist row>')
       .replace(/^[\u{1F1E6}-\u{1F1FF}]{2} .+/u, '<country>')
       .replace(/^(Country|Currency for totals & budget) .+›$/, '$1 <setting> ›')
       .replace(/[₹$€£][\d,.]+/g, '<price>')

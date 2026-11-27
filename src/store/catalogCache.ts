@@ -19,6 +19,8 @@ export interface CachedCatalog {
   fxRates: FxRates | null;
   fxDate: string | null;
   offers: Offer[];
+  /** Announced upcoming sales (optional in older caches). */
+  upcomingOffers?: Offer[];
   marketplaces: MarketplaceStatus[];
 }
 
@@ -36,6 +38,7 @@ export async function readCatalogCache(): Promise<CachedCatalog | null> {
       fxRates: parsed.fxRates && typeof parsed.fxRates === 'object' ? parsed.fxRates : null,
       fxDate: typeof parsed.fxDate === 'string' ? parsed.fxDate : null,
       offers: Array.isArray(parsed.offers) ? parsed.offers : [],
+      upcomingOffers: Array.isArray(parsed.upcomingOffers) ? parsed.upcomingOffers : [],
       marketplaces: Array.isArray(parsed.marketplaces) ? parsed.marketplaces : [],
     };
   } catch {

@@ -75,6 +75,8 @@ interface Spec {
   prices: number[];
   source?: string;
   p14?: number;
+  /** Yearly price pattern (as catalog_items.season): month ratios, basis and listings behind it. */
+  season?: { basis: 'listing' | 'category' | 'marketplace'; listings: number; years: number; months: Record<string, number> };
   low?: number;
   extra?: Record<string, unknown>;
 }
@@ -115,8 +117,14 @@ function rowOf(spec: Spec): Row {
     price_history: historyOf(spec.prices.slice(-30)),
     stats: statsOf(spec.prices),
     prediction: spec.p14 === undefined ? null : predictionOf(current, spec.p14, spec.low ?? Math.round(current * 0.9)),
+    season: spec.season ?? null,
     ...spec.extra,
   };
+}
+
+/** Month ratios (1-12) with one cheap month. */
+function monthsCheapIn(month: number, ratio: number): Record<string, number> {
+  return Object.fromEntries(Array.from({ length: 12 }, (_, i) => [String(i + 1), i + 1 === month ? ratio : 1.02]));
 }
 
 /** About 13 months of history, cheapest every October (for the seasonal insight). */
@@ -129,13 +137,13 @@ function initialRows(): Row[] {
     { id: 'LIN1', title: 'Women White Linen Shirt', category: 'Tops', department: 'women', styles: ['Minimalist'], colors: ['#F5F5F5'], prices: [999, 999, 979, 959, 949, 949, 939, 929, 919, 899], p14: 0.72, low: 820 },
     { id: 'TRT1', title: 'Women Black Ribbed Turtleneck', category: 'Tops', department: 'women', styles: ['Minimalist', 'Dark Academia'], colors: ['#1C1C1C'], prices: [749, 749, 749, 749, 749, 749, 749, 749], p14: 0.12, low: 749 },
     { id: 'BLS1', title: 'Women Pink Puff Sleeve Blouse', category: 'Tops', department: 'women', styles: ['Cottagecore'], colors: ['#E8A0B4'], prices: [999, 999] },
-    { id: 'TRS1', title: 'Women Straight Leg Beige Trousers', category: 'Bottoms', department: 'women', styles: ['Minimalist'], colors: ['#D8C3A0'], prices: [1399, 1349, 1299], p14: 0.45 },
+    { id: 'TRS1', title: 'Women Straight Leg Beige Trousers', category: 'Bottoms', department: 'women', styles: ['Minimalist'], colors: ['#D8C3A0'], prices: [1399, 1349, 1299], p14: 0.45, season: { basis: 'category', listings: 36, years: 2.1, months: monthsCheapIn(12, 0.85) } },
     { id: 'JNS1', title: 'Women High Waist Black Jeans', category: 'Bottoms', department: 'women', styles: ['Minimalist', 'Grunge'], colors: ['#1C1C1C'], prices: [1499] },
     { id: 'DRS1', title: 'Floral Tiered Maxi Dress', category: 'Dresses', department: 'women', styles: ['Bohemian', 'Cottagecore'], colors: ['#E8A0B4', '#556B2F'], prices: [1199] },
     { id: 'DRS2', title: 'Black Slip Dress', category: 'Dresses', department: 'women', styles: ['Minimalist'], colors: ['#1C1C1C'], prices: [1099] },
     { id: 'SNK1', title: 'Women White Leather Sneakers', category: 'Shoes', department: 'women', styles: ['Minimalist'], colors: ['#F5F5F5'], prices: [1999, 1999] },
     { id: 'LOF1', title: 'Women Tan Loafers', category: 'Shoes', department: 'women', styles: ['Preppy'], colors: ['#C19A6B'], prices: [1799] },
-    { id: 'BLZ1', title: 'Women Camel Wool Blazer', category: 'Outerwear', department: 'women', styles: ['Dark Academia', 'Minimalist'], colors: ['#C19A6B'], prices: yearOfPrices(), p14: 0.65, low: 1199 },
+    { id: 'BLZ1', title: 'Women Camel Wool Blazer', category: 'Outerwear', department: 'women', styles: ['Dark Academia', 'Minimalist'], colors: ['#C19A6B'], prices: yearOfPrices(), p14: 0.65, low: 1199, season: { basis: 'listing', listings: 1, years: 1.1, months: monthsCheapIn(10, 0.8) } },
     { id: 'TOT1', title: 'Women Beige Tote Bag', category: 'Bags', department: 'women', styles: ['Minimalist'], colors: ['#D8C3A0'], prices: [799] },
     { id: 'EAR1', title: 'Gold Hoop Earrings', category: 'Accessories', department: 'women', styles: ['Y2K'], colors: ['#D4AF37'], prices: [399] },
     { id: 'OXF1', title: 'Men White Oxford Shirt', category: 'Tops', department: 'men', styles: ['Minimalist', 'Preppy'], colors: ['#F5F5F5'], prices: [899] },
@@ -288,6 +296,14 @@ export function createFakeBackend(): FakeBackend {
         return send(200, [
           { horizon_days: 14, source: null, resolved: 812, dropped: 300, brier: 0.162, brier_base_rate: 0.233, wait_calls: 210, wait_correct: 151, buy_calls: 402, buy_correct: 356, since: '2026-10-01', last_resolved: dateKey(Date.now()) },
         ]);
+      case '/rest/v1/upcoming_offers':
+        // An announced Amazon sale starting in 8 days (like the upcoming_offers view).
+        return send(
+          200,
+          eq('market') === 'IN'
+            ? [{ id: 'awin:IN:sale', network: 'awin', market: 'IN', merchant: 'Amazon', merchant_domain: 'amazon.in', source: 'amazon', listing_id: null, title: 'Great Winter Sale', description: null, code: null, url: 'https://www.amazon.in/winter-sale', discount_text: 'Up to 60% off', min_spend: null, currency: null, starts_at: isoAgo(-8 * DAY), ends_at: isoAgo(-14 * DAY), last_seen_at: isoAgo(3600_000) }]
+            : [],
+        );
       case '/rest/v1/prediction_calibration':
         return send(200, []);
       case '/functions/v1/live-item': {

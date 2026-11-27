@@ -8,16 +8,16 @@ import { Badge, QuestDefinition } from '../types';
 // ---- Badges ----
 
 export const BADGES: Badge[] = [
-  { id: 'badge-001', name: 'First Find', description: 'Complete your Style Profile to unlock your first matches.', icon: '🔮', rarity: 'common' },
-  { id: 'badge-002', name: 'Eco Warrior', description: 'Complete the Sustainable Week Challenge.', icon: '🌍', rarity: 'rare' },
-  { id: 'badge-003', name: 'Style Chameleon', description: 'Complete the Style Remix Challenge.', icon: '🦎', rarity: 'rare' },
-  { id: 'badge-004', name: 'Treasure Hunter', description: 'Complete the Hidden Gems Explorer quest.', icon: '💎', rarity: 'epic' },
-  { id: 'badge-005', name: 'Deal Detective', description: 'Complete the Budget Detective quest.', icon: '🕵️', rarity: 'epic' },
-  { id: 'badge-006', name: 'Community Champion', description: 'Complete the Community Swap Organizer quest.', icon: '👑', rarity: 'legendary' },
-  { id: 'badge-007', name: 'Capsule Master', description: 'Complete the Capsule Wardrobe Challenge.', icon: '💼', rarity: 'legendary' },
-  { id: 'badge-008', name: 'Vintage Scholar', description: 'Complete the Vintage Story Teller quest.', icon: '📚', rarity: 'rare' },
-  { id: 'badge-009', name: 'Price Prophet', description: 'Have one of your price alerts hit its target.', icon: '🎯', rarity: 'epic' },
-  { id: 'badge-010', name: 'Thrift Streak', description: 'Open VibeVault 7 days in a row.', icon: '🔥', rarity: 'common' },
+  { id: 'badge-001', name: 'First Find', description: 'Complete your Style Profile to unlock your first matches.', icon: 'sparkles-outline', rarity: 'common' },
+  { id: 'badge-002', name: 'Eco Warrior', description: 'Complete the Sustainable Week Challenge.', icon: 'leaf-outline', rarity: 'rare' },
+  { id: 'badge-003', name: 'Style Chameleon', description: 'Complete the Style Remix Challenge.', icon: 'color-palette-outline', rarity: 'rare' },
+  { id: 'badge-004', name: 'Treasure Hunter', description: 'Complete the Hidden Gems Explorer quest.', icon: 'diamond-outline', rarity: 'epic' },
+  { id: 'badge-005', name: 'Deal Detective', description: 'Complete the Budget Detective quest.', icon: 'search-outline', rarity: 'epic' },
+  { id: 'badge-006', name: 'Community Champion', description: 'Complete the Community Swap Organizer quest.', icon: 'people-outline', rarity: 'legendary' },
+  { id: 'badge-007', name: 'Capsule Master', description: 'Complete the Capsule Wardrobe Challenge.', icon: 'briefcase-outline', rarity: 'legendary' },
+  { id: 'badge-008', name: 'Vintage Scholar', description: 'Complete the Vintage Story Teller quest.', icon: 'book-outline', rarity: 'rare' },
+  { id: 'badge-009', name: 'Price Prophet', description: 'Have one of your price alerts hit its target.', icon: 'trending-down-outline', rarity: 'epic' },
+  { id: 'badge-010', name: 'Thrift Streak', description: 'Open VibeVault 7 days in a row.', icon: 'flame-outline', rarity: 'common' },
 ];
 
 export const BADGE_IDS = {
@@ -47,7 +47,7 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Share your look with a friend',
     ],
     helperAction: 'open-composer',
-    icon: '🎨',
+    icon: 'color-palette-outline',
   },
   {
     id: 'quest-002',
@@ -68,7 +68,7 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Day 6 – wash cold and air-dry a load',
       'Day 7 – log a third second-hand purchase',
     ],
-    icon: '🌿',
+    icon: 'leaf-outline',
   },
   {
     id: 'quest-003',
@@ -84,7 +84,7 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Style it in 3 different outfits',
       'Share your favourite outfit with friends',
     ],
-    icon: '👗',
+    icon: 'shirt-outline',
   },
   {
     id: 'quest-004',
@@ -101,7 +101,7 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Visit thrift store #3 and find an item',
     ],
     helperAction: 'find-thrift-stores',
-    icon: '🗺️',
+    icon: 'map-outline',
   },
   {
     id: 'quest-005',
@@ -119,7 +119,7 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Swap at least 2 items',
       'Rate the experience',
     ],
-    icon: '🤝',
+    icon: 'people-outline',
   },
   {
     id: 'quest-006',
@@ -138,7 +138,7 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Buy one item at your target price',
     ],
     helperAction: 'open-deals',
-    icon: '🔍',
+    icon: 'search-outline',
   },
   {
     id: 'quest-007',
@@ -161,7 +161,7 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Create 15 outfit combinations',
       'Stay within your budget',
     ],
-    icon: '💼',
+    icon: 'briefcase-outline',
   },
   {
     id: 'quest-008',
@@ -177,6 +177,6 @@ export const QUEST_DEFINITIONS: QuestDefinition[] = [
       'Write a short story for each',
       'Share the stories with friends',
     ],
-    icon: '📖',
+    icon: 'book-outline',
   },
 ];

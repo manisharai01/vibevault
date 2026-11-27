@@ -235,6 +235,15 @@ export class Harness {
         .trim();
     });
     this.clicked.add(name);
+    // Wait until it stops moving (a scroll or animation in progress), so the click lands on it.
+    let last = '';
+    for (let i = 0; i < 15; i++) {
+      const box = await el.boundingBox();
+      const key = box ? `${Math.round(box.x)},${Math.round(box.y)}` : '';
+      if (key && key === last) break;
+      last = key;
+      await pause(80);
+    }
     await el.click();
     await pause(250);
   }
@@ -307,7 +316,8 @@ export class Harness {
       await this.page.keyboard.press('Backspace');
     }
     await this.page.keyboard.type(text);
-    await pause(250);
+    // Focusing a field can scroll the screen (e.g. the price alert input); let it settle.
+    await pause(600);
   }
 
   /** Every interactive control on screen right now (including ones scrolled out of view). */

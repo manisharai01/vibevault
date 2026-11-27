@@ -6,12 +6,12 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "vibevault",
-    "userInterfaceStyle": "dark",
-    "backgroundColor": "#0F0F1A",
+    "userInterfaceStyle": "light",
+    "backgroundColor": "#F5F2EC",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0F0F1A"
+      "backgroundColor": "#F5F2EC"
     },
     "ios": {
       "supportsTablet": true,
@@ -39,8 +39,8 @@
       "favicon": "./assets/favicon.png",
       "name": "VibeVault",
       "shortName": "VibeVault",
-      "themeColor": "#0F0F1A",
-      "backgroundColor": "#0F0F1A"
+      "themeColor": "#F5F2EC",
+      "backgroundColor": "#F5F2EC"
     },
     "plugins": [
       "expo-font"

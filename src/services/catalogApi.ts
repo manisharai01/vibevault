@@ -136,9 +136,23 @@ export async function fetchFxRates(config: BackendConfig): Promise<{ rates: FxRa
 /** Coupons and offers valid now for shoppers in `market` (expired ones are never returned). */
 export async function fetchOffers(config: BackendConfig, market: string): Promise<Offer[]> {
   if (!/^[A-Z]{2}$/.test(market)) return [];
-  const rows = rowsOf<Record<string, unknown>>(
+  return parseOfferRows(
     await get<unknown>(config, `active_offers?select=*&market=eq.${market}&order=ends_at.asc.nullslast&limit=400`, 'Loading offers'),
+    market,
   );
+}
+
+/** Sales stores have announced in their official feeds that start within the next 90 days. */
+export async function fetchUpcomingOffers(config: BackendConfig, market: string): Promise<Offer[]> {
+  if (!/^[A-Z]{2}$/.test(market)) return [];
+  return parseOfferRows(
+    await get<unknown>(config, `upcoming_offers?select=*&market=eq.${market}&order=starts_at.asc&limit=200`, 'Loading announced sales'),
+    market,
+  );
+}
+
+function parseOfferRows(value: unknown, market: string): Offer[] {
+  const rows = rowsOf<Record<string, unknown>>(value);
   const offers: Offer[] = [];
   for (const r of rows) {
     const url = typeof r.url === 'string' && r.url.startsWith('https://') ? r.url : null;

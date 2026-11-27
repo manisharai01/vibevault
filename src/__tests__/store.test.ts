@@ -415,6 +415,36 @@ describe('purchases', () => {
   });
 });
 
+describe('wardrobe and history', () => {
+  it('adds what you buy to your wardrobe and removes it when the purchase is undone', () => {
+    store().completeProfile(answers, [], NOW);
+    store().logPurchase(SHIRT, NOW);
+    expect(store().ownedPieces).toEqual([
+      expect.objectContaining({ id: `purchase:${SHIRT}`, slot: 'top', itemId: SHIRT, colors: ['white'] }),
+    ]);
+    store().undoPurchase(SHIRT);
+    expect(store().ownedPieces).toEqual([]);
+  });
+
+  it('adds and removes pieces the user already owns', () => {
+    expect(store().addOwnedPiece({ slot: 'shoes', title: '  ', colors: [] }, NOW)).toBeNull();
+    const piece = store().addOwnedPiece({ slot: 'shoes', title: ' White trainers ', colors: ['white', 'white'] }, NOW)!;
+    expect(piece).toMatchObject({ slot: 'shoes', title: 'White trainers', colors: ['white'], itemId: null });
+    expect(store().ownedPieces).toHaveLength(1);
+    store().removeOwnedPiece(piece.id);
+    expect(store().ownedPieces).toHaveLength(0);
+  });
+
+  it('remembers recently viewed listings, newest first, without duplicates', () => {
+    store().recordView(SHIRT);
+    store().recordView(JACKET);
+    store().recordView(SHIRT);
+    expect(store().recentlyViewed).toEqual([SHIRT, JACKET]);
+    store().clearRecentlyViewed();
+    expect(store().recentlyViewed).toEqual([]);
+  });
+});
+
 describe('quests', () => {
   const quest = QUEST_DEFINITIONS.find((q) => q.id === 'quest-003')!; // 3 steps, badge reward
 
@@ -485,7 +515,9 @@ describe('reset & persistence', () => {
     await flush();
     const saved = JSON.parse((await AsyncStorage.getItem(STORE_NAME))!);
     expect(saved.version).toBe(STORE_VERSION);
-    expect(Object.keys(saved.state).sort()).toEqual(['isProfileComplete', 'priceAlerts', 'profile', 'purchases', 'questProgress', 'streak', 'vibeSummary'].sort());
+    expect(Object.keys(saved.state).sort()).toEqual(
+      ['isProfileComplete', 'ownedPieces', 'priceAlerts', 'profile', 'purchases', 'questProgress', 'recentlyViewed', 'streak', 'vibeSummary'].sort(),
+    );
     expect(saved.state.profile.wishlist).toEqual([JACKET]);
   });
 

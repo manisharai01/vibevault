@@ -113,12 +113,13 @@ describe('Awin offer parsing', () => {
     // Live until 15:00 UTC, not started until 13:00 UTC.
     expect(parseAwinOffer(offer({ endDate: '2026-11-26T15:00:00.000' }), 'GB', NOW)?.endsAt).toBe('2026-11-26T15:00:00.000Z');
     expect(parseAwinOffer(offer({ endDate: '2026-11-26T11:59:59.000' }), 'GB', NOW)).toBeNull();
-    expect(parseAwinOffer(offer({ startDate: '2026-11-26T13:00:00.000' }), 'GB', NOW)).toBeNull();
+    expect(parseAwinOffer(offer({ startDate: '2026-11-26T13:00:00.000' }), 'GB', NOW)?.startsAt).toBe('2026-11-26T13:00:00.000Z');
   });
 
-  it('drops expired, upcoming and unreadable offers; keeps offers without an end date', () => {
+  it('drops expired, far-off and unreadable offers; keeps upcoming ones and offers without an end date', () => {
     expect(parseAwinOffer(offer({ endDate: '2026-11-25T23:59:59.000' }), 'GB', NOW)).toBeNull();
-    expect(parseAwinOffer(offer({ startDate: '2026-12-01T00:00:00.000' }), 'GB', NOW)).toBeNull();
+    expect(parseAwinOffer(offer({ startDate: '2026-12-01T00:00:00.000' }), 'GB', NOW)?.startsAt).toBe('2026-12-01T00:00:00.000Z');
+    expect(parseAwinOffer(offer({ startDate: '2027-04-01T00:00:00.000' }), 'GB', NOW)).toBeNull();
     expect(parseAwinOffer(offer({ endDate: 'soon' }), 'GB', NOW)).toBeNull();
     expect(parseAwinOffer(offer({ endDate: null }), 'GB', NOW)?.endsAt).toBeNull();
   });
@@ -157,12 +158,22 @@ describe('Awin offer parsing', () => {
 });
 
 describe('Awin provider', () => {
-  it('posts the documented filter body with the bearer token, then reads the joined programmes', async () => {
-    const { fetch, calls } = recordingFetch((url) => (url === OFFERS_URL ? [200, page([offer()], 1)] : [200, [programme]]));
+  const statusOf = (init?: RequestInit) => JSON.parse(String(init?.body)).filters.status as 'active' | 'upcoming';
+  const activeCalls = <T extends { url: string; init?: RequestInit }>(calls: T[]) => offerCalls(calls).filter((c) => statusOf(c.init) === 'active');
+
+  it('posts the documented filter bodies (active, then upcoming) with the bearer token, then reads the joined programmes', async () => {
+    const soon = offer({ promotionId: 777, startDate: '2026-12-05T00:00:00.000', endDate: '2026-12-12T00:00:00.000' });
+    const { fetch, calls } = recordingFetch((url, init) =>
+      url === OFFERS_URL ? [200, statusOf(init) === 'active' ? page([offer()], 1) : page([soon], 1)] : [200, [programme]],
+    );
     const offers = await createAwinProvider(CONFIG, fetch, () => NOW).fetchOffers('GB');
 
-    expect(offers.map((o) => [o.networkOfferId, o.merchantDomain])).toEqual([['123456', 'example.com']]);
-    expect(calls.map((c) => c.url)).toEqual([OFFERS_URL, PROGRAMMES_URL]);
+    expect(offers.map((o) => [o.networkOfferId, o.startsAt])).toEqual([
+      ['123456', offer().startDate ? parseAwinOffer(offer(), 'GB', NOW)?.startsAt : null],
+      ['777', '2026-12-05T00:00:00.000Z'],
+    ]);
+    expect(offers.every((o) => o.merchantDomain === 'example.com')).toBe(true);
+    expect(calls.map((c) => c.url)).toEqual([OFFERS_URL, OFFERS_URL, PROGRAMMES_URL]);
     expect(calls[0].init?.method).toBe('POST');
     expect(calls[0].headers).toEqual({
       Authorization: 'Bearer awin-test-token',
@@ -173,8 +184,9 @@ describe('Awin provider', () => {
       filters: { membership: 'joined', regionCodes: ['GB', 'US', 'BR', 'BU'], status: 'active', type: 'all' },
       pagination: { page: 1, pageSize: 200 },
     });
-    expect(calls[1].init?.method).toBeUndefined();
-    expect(calls[1].headers).toEqual({ Authorization: 'Bearer awin-test-token', Accept: 'application/json' });
+    expect(requestBody(calls[1]).filters.status).toBe('upcoming');
+    expect(calls[2].init?.method).toBeUndefined();
+    expect(calls[2].headers).toEqual({ Authorization: 'Bearer awin-test-token', Accept: 'application/json' });
   });
 
   it('serves every configured market from one sweep, split by region', async () => {
@@ -185,38 +197,41 @@ describe('Awin provider', () => {
       offer({ promotionId: 3, type: 'promotion', voucher: undefined, regions: { all: true } }),
       offer({ promotionId: 4, endDate: '2026-11-26T12:02:00.000' }),
     ];
-    const { fetch, calls } = recordingFetch((url) => (url === OFFERS_URL ? [200, page(data, data.length)] : [200, [programme]]));
+    const { fetch, calls } = recordingFetch((url, init) =>
+      url === OFFERS_URL ? [200, statusOf(init) === 'active' ? page(data, data.length) : page([], 0)] : [200, [programme]],
+    );
     const provider = createAwinProvider(CONFIG, fetch, () => now);
 
     const [gb, us] = await Promise.all([provider.fetchOffers('GB'), provider.fetchOffers('US')]);
     expect(gb.map((o) => o.networkOfferId)).toEqual(['1', '3', '4']);
     expect(us.map((o) => o.networkOfferId)).toEqual(['2', '3']);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
 
     // Within the cache window the sweep is reused, but validity is checked at the current time.
     now = new Date(NOW.getTime() + AWIN_SWEEP_TTL_MS / 2);
     expect((await provider.fetchOffers('GB')).map((o) => o.networkOfferId)).toEqual(['1', '3']);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
 
     now = new Date(NOW.getTime() + AWIN_SWEEP_TTL_MS);
     await provider.fetchOffers('GB');
-    expect(offerCalls(calls)).toHaveLength(2);
+    expect(activeCalls(calls)).toHaveLength(2);
 
     // A market outside the configured list gets its own sweep.
     await provider.fetchOffers('DE');
-    expect(requestBody(offerCalls(calls)[2]).filters.regionCodes).toEqual(['DE']);
+    expect(requestBody(activeCalls(calls)[2]).filters.regionCodes).toEqual(['DE']);
   });
 
   it('reads pages until the reported total', async () => {
     const all = Array.from({ length: 450 }, (_, i) => offer({ promotionId: 5000 + i }));
     const { fetch, calls } = recordingFetch((url, init) => {
       if (url !== OFFERS_URL) return [200, []];
+      if (statusOf(init) === 'upcoming') return [200, page([], 0)];
       const { page: n } = JSON.parse(String(init?.body)).pagination;
       return [200, page(all.slice((n - 1) * 200, n * 200), all.length, n)];
     });
     const offers = await createAwinProvider(CONFIG, fetch, () => NOW).fetchOffers('GB');
     expect(offers).toHaveLength(450);
-    expect(offerCalls(calls).map((c) => requestBody(c).pagination)).toEqual([
+    expect(activeCalls(calls).map((c) => requestBody(c).pagination)).toEqual([
       { page: 1, pageSize: 200 },
       { page: 2, pageSize: 200 },
       { page: 3, pageSize: 200 },
@@ -226,23 +241,24 @@ describe('Awin provider', () => {
   it('stops on an empty page, on a short page without a total, and at the page cap', async () => {
     const empty = recordingFetch(() => [200, page([], 0)]);
     expect(await createAwinProvider(CONFIG, empty.fetch, () => NOW).fetchOffers('GB')).toEqual([]);
-    expect(empty.calls.map((c) => c.url)).toEqual([OFFERS_URL]); // no programme lookup without offers
+    expect(empty.calls.map((c) => c.url)).toEqual([OFFERS_URL, OFFERS_URL]); // no programme lookup without offers
 
-    const short = recordingFetch((url) => (url === OFFERS_URL ? [200, { data: [offer()] }] : [200, []]));
+    const short = recordingFetch((url, init) => (url === OFFERS_URL ? [200, statusOf(init) === 'active' ? { data: [offer()] } : page([], 0)] : [200, []]));
     await createAwinProvider(CONFIG, short.fetch, () => NOW).fetchOffers('GB');
-    expect(offerCalls(short.calls)).toHaveLength(1);
+    expect(activeCalls(short.calls)).toHaveLength(1);
 
     const full = Array.from({ length: 200 }, (_, i) => offer({ promotionId: i }));
-    const endless = recordingFetch((url) => (url === OFFERS_URL ? [200, page(full, 1_000_000)] : [200, []]));
+    const endless = recordingFetch((url, init) => (url === OFFERS_URL ? [200, statusOf(init) === 'active' ? page(full, 1_000_000) : page([], 0)] : [200, []]));
     await createAwinProvider(CONFIG, endless.fetch, () => NOW).fetchOffers('GB');
-    expect(offerCalls(endless.calls)).toHaveLength(AWIN_MAX_PAGES);
+    expect(activeCalls(endless.calls)).toHaveLength(AWIN_MAX_PAGES);
   });
 
   it('rejects on HTTP errors and retries a failed sweep on the next call', async () => {
     let fail = true;
-    const { fetch, calls } = recordingFetch((url) => {
+    const { fetch, calls } = recordingFetch((url, init) => {
       if (url !== OFFERS_URL) return [200, [programme]];
-      return fail ? [401, { error: 'Unauthorized' }] : [200, page([offer()], 1)];
+      if (fail) return [401, { error: 'Unauthorized' }];
+      return [200, statusOf(init) === 'active' ? page([offer()], 1) : page([], 0)];
     });
     const provider = createAwinProvider(CONFIG, fetch, () => NOW);
     const failed = provider.fetchOffers('GB');
@@ -251,11 +267,13 @@ describe('Awin provider', () => {
 
     fail = false;
     expect(await provider.fetchOffers('GB')).toHaveLength(1);
-    expect(offerCalls(calls)).toHaveLength(2);
+    expect(activeCalls(calls)).toHaveLength(2);
   });
 
   it('still returns offers when the programme list fails', async () => {
-    const { fetch } = recordingFetch((url) => (url === OFFERS_URL ? [200, page([offer()], 1)] : [403, { error: 'Forbidden' }]));
+    const { fetch } = recordingFetch((url, init) =>
+      url === OFFERS_URL ? [200, statusOf(init) === 'active' ? page([offer()], 1) : page([], 0)] : [403, { error: 'Forbidden' }],
+    );
     const [only] = await createAwinProvider(CONFIG, fetch, () => NOW).fetchOffers('GB');
     expect(only).toMatchObject({ merchantDomain: 'example.com', imageUrl: null, categories: [], code: 'EXTRA10' });
   });

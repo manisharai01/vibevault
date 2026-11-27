@@ -155,6 +155,24 @@ export interface HorizonPrediction {
   verdict: Verdict;
 }
 
+/**
+ * How prices move through the year, learnt from recorded and archived price history
+ * (see compute_seasonality in supabase/migrations). Most specific available basis wins.
+ */
+export interface SeasonProfile {
+  /** This listing's own history, its category on this marketplace in this country, or the whole marketplace there. */
+  basis: 'listing' | 'category' | 'marketplace';
+  /** How many listings' histories the pattern combines (1 for a listing's own). */
+  listings: number;
+  /** Years of price history behind it (median across those listings). */
+  years: number;
+  /**
+   * Typical price in each calendar month relative to the yearly typical price (1 = typical,
+   * 0.85 = 15% cheaper); null where there wasn't enough data. Index 0 = January.
+   */
+  months: (number | null)[];
+}
+
 /** Published by the backend's price model (see supabase/migrations). */
 export interface Prediction {
   madeOn: string; // YYYY-MM-DD
@@ -195,6 +213,8 @@ export interface FashionItem {
   stats: PriceStats | null;
   /** The model's latest prediction for this listing; null while it is still learning. */
   prediction: Prediction | null;
+  /** How its price usually moves through the year; null until there is a year of history behind it. */
+  season: SeasonProfile | null;
   /** Pre-owned listing (vs. new retail). */
   secondhand: boolean;
   /** 0-100 relevance to the user (0 until the Style Profile is complete). */
@@ -280,6 +300,21 @@ export interface PriceAlert {
   triggeredPrice?: number;
   /** Whether the user has seen a triggered alert in the Alerts list. */
   acknowledged: boolean;
+}
+
+/** Wardrobe slots the Stylist plans (one category each). */
+export type WardrobeSlot = 'top' | 'bottom' | 'dress' | 'layer' | 'shoes' | 'bag' | 'accessory';
+
+/** A piece the user already owns, so the wardrobe plan doesn't suggest buying it again. */
+export interface OwnedPiece {
+  id: string;
+  slot: WardrobeSlot;
+  title: string;
+  colors: ColorFamily[];
+  /** The listing it came from (bought through VibeVault or marked "I own one like this"). */
+  itemId: string | null;
+  image: string | null;
+  addedAt: string; // ISO timestamp
 }
 
 export interface Purchase {

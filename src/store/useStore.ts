@@ -23,10 +23,13 @@ import {
   fetchFxRates,
   fetchOffers,
   fetchTrackRecord,
+  fetchUpcomingOffers,
   liveCheckListing,
   type LiveCheck,
 } from '../services/catalogApi';
 import { BADGE_BY_ID, getLevelInfo, isQuestOverdue, startQuestProgress, updateStreak } from '../services/gamification';
+import { slotForCategory } from '../services/composer';
+import { colorFamilies } from '../services/itemTraits';
 import { checkAlerts } from '../services/priceEngine';
 import { buildStyleProfile, getRecommendations } from '../services/styleEngine';
 import {
@@ -35,7 +38,9 @@ import {
   CatalogStatus,
   FashionItem,
   MarketplaceStatus,
+  ColorFamily,
   Offer,
+  OwnedPiece,
   PriceAlert,
   ProfilerAnswers,
   Purchase,
@@ -43,12 +48,15 @@ import {
   StreakState,
   TasteRating,
   TrackRecord,
+  WardrobeSlot,
 } from '../types';
 import { toDateKey } from '../utils/date';
 import { convertAmount, formatMoney, FxRates } from '../utils/format';
 import { readCatalogCache, writeCatalogCache } from './catalogCache';
 import {
   MAX_NAME_LENGTH,
+  MAX_OWNED_PIECES,
+  MAX_RECENTLY_VIEWED,
   PersistedState,
   STORE_NAME,
   STORE_VERSION,
@@ -92,6 +100,8 @@ interface RuntimeState {
   fxDate: string | null;
   /** Coupons/offers valid for the catalogue's country. */
   offers: Offer[];
+  /** Sales stores have announced (starting within 90 days) in their official feeds. */
+  upcomingOffers: Offer[];
   marketplaces: MarketplaceStatus[];
   /** Countries with live listings. */
   availableMarkets: { market: string; listings: number; sources: string[] }[];
@@ -115,6 +125,12 @@ interface Actions {
   checkPriceAlerts: (now?: Date) => { triggered: TriggeredAlert[]; newBadges: Badge[] };
   logPurchase: (itemId: string, now?: Date) => Purchase | null;
   undoPurchase: (itemId: string) => void;
+  /** Adds a piece the user owns; null when the title is empty or the wardrobe is full. */
+  addOwnedPiece: (input: { slot: WardrobeSlot; title: string; colors: ColorFamily[]; itemId?: string | null; image?: string | null }, now?: Date) => OwnedPiece | null;
+  removeOwnedPiece: (id: string) => void;
+  /** Remembers that a listing was opened (for "Recently viewed"). */
+  recordView: (itemId: string) => void;
+  clearRecentlyViewed: () => void;
   startQuest: (questId: string, now?: Date) => boolean;
   completeQuestStep: (questId: string, now?: Date) => QuestStepResult;
   expireQuests: (now?: Date) => string[];
@@ -218,6 +234,7 @@ export const useStore = create<AppState>()(
         fxRates: null,
         fxDate: null,
         offers: [],
+        upcomingOffers: [],
         marketplaces: [],
         availableMarkets: [],
         trackRecord: [],
@@ -411,8 +428,19 @@ export const useStore = create<AppState>()(
             secondhand: item.secondhand,
             purchasedAt: now.toISOString(),
           };
+          // What you buy becomes part of your wardrobe.
+          const owned: OwnedPiece = {
+            id: `purchase:${itemId}`,
+            slot: slotForCategory(item.category),
+            title: item.title.slice(0, 120),
+            colors: colorFamilies(item).slice(0, 4),
+            itemId,
+            image: item.image,
+            addedAt: now.toISOString(),
+          };
           set({
             purchases: [purchase, ...state.purchases],
+            ownedPieces: [owned, ...state.ownedPieces.filter((p) => p.id !== owned.id)].slice(0, MAX_OWNED_PIECES),
             // An alert for something you've bought is no longer useful.
             priceAlerts: state.priceAlerts.filter((a) => !(a.itemId === itemId && a.status === 'active')),
           });
@@ -420,8 +448,42 @@ export const useStore = create<AppState>()(
         },
 
         undoPurchase: (itemId) => {
-          set((state) => ({ purchases: state.purchases.filter((p) => p.itemId !== itemId) }));
+          set((state) => ({
+            purchases: state.purchases.filter((p) => p.itemId !== itemId),
+            ownedPieces: state.ownedPieces.filter((p) => p.id !== `purchase:${itemId}`),
+          }));
         },
+
+        // ---- Wardrobe ----
+
+        addOwnedPiece: (input, now = new Date()) => {
+          const title = input.title.trim().slice(0, 120);
+          const state = get();
+          if (!title || state.ownedPieces.length >= MAX_OWNED_PIECES) return null;
+          const piece: OwnedPiece = {
+            id: makeId('owned'),
+            slot: input.slot,
+            title,
+            colors: [...new Set(input.colors)].slice(0, 4),
+            itemId: input.itemId ?? null,
+            image: input.image ?? null,
+            addedAt: now.toISOString(),
+          };
+          set({ ownedPieces: [piece, ...state.ownedPieces] });
+          return piece;
+        },
+
+        removeOwnedPiece: (id) => {
+          set((state) => ({ ownedPieces: state.ownedPieces.filter((p) => p.id !== id) }));
+        },
+
+        recordView: (itemId) => {
+          const state = get();
+          if (state.recentlyViewed[0] === itemId) return;
+          set({ recentlyViewed: [itemId, ...state.recentlyViewed.filter((id) => id !== itemId)].slice(0, MAX_RECENTLY_VIEWED) });
+        },
+
+        clearRecentlyViewed: () => set({ recentlyViewed: [] }),
 
         // ---- Quests ----
 
@@ -527,6 +589,7 @@ export const useStore = create<AppState>()(
             fxRates: cache.fxRates,
             fxDate: cache.fxDate,
             offers: cache.offers,
+            upcomingOffers: cache.upcomingOffers ?? [],
             marketplaces: cache.marketplaces,
             recommendedItems: rank(catalog, get().profile, cache.fxRates),
             catalogFetchedAt: cache.fetchedAt,
@@ -563,11 +626,12 @@ export const useStore = create<AppState>()(
                 ...current.profile.wishlist,
                 ...current.priceAlerts.filter((a) => a.status === 'active').map((a) => a.itemId),
               ];
-              const [rows, status, fx, offers, record, markets] = await Promise.all([
+              const [rows, status, fx, offers, upcomingOffers, record, markets] = await Promise.all([
                 fetchCatalogRows(config, market, tracked),
                 fetchCatalogStatus(config).catch(() => get().marketplaces),
                 fetchFxRates(config).catch(() => ({ rates: get().fxRates, date: get().fxDate })),
                 market ? fetchOffers(config, market).catch(() => get().offers) : Promise.resolve([] as Offer[]),
+                market ? fetchUpcomingOffers(config, market).catch(() => get().upcomingOffers) : Promise.resolve([] as Offer[]),
                 fetchTrackRecord(config).catch(() => ({ records: get().trackRecord, calibration: get().calibration })),
                 fetchAvailableMarkets(config).catch(() => get().availableMarkets),
               ]);
@@ -583,6 +647,7 @@ export const useStore = create<AppState>()(
                 fxRates: fx.rates,
                 fxDate: fx.date,
                 offers,
+                upcomingOffers,
                 marketplaces: status,
                 availableMarkets: markets,
                 trackRecord: record.records,
@@ -600,6 +665,7 @@ export const useStore = create<AppState>()(
                 fxRates: fx.rates,
                 fxDate: fx.date,
                 offers,
+                upcomingOffers,
                 marketplaces: status,
               });
               return true;
@@ -654,6 +720,8 @@ export const useStore = create<AppState>()(
         questProgress: state.questProgress,
         purchases: state.purchases,
         streak: state.streak,
+        ownedPieces: state.ownedPieces,
+        recentlyViewed: state.recentlyViewed,
       }),
       migrate: (persisted, version) => migratePersistedState(persisted, version) as PersistedState,
       merge: (persisted, current) => ({ ...current, ...sanitizePersistedState(persisted) }),

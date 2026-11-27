@@ -35,14 +35,13 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
     if (!this.state.error) return this.props.children;
     return (
       <View style={styles.container} accessibilityRole="alert">
-        <Text style={styles.emoji}>😵‍💫</Text>
         <Text style={styles.title}>Something went wrong</Text>
         <Text style={styles.message}>An unexpected error occurred. You can try again, or reset your saved data if the problem continues.</Text>
         <TouchableOpacity style={[styles.button, styles.primary]} onPress={this.retry} accessibilityRole="button">
-          <Text style={styles.buttonText}>Try Again</Text>
+          <Text style={styles.buttonText}>Try again</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.button} onPress={this.resetAndRetry} accessibilityRole="button">
-          <Text style={[styles.buttonText, { color: Colors.textSecondary }]}>Reset App Data</Text>
+          <Text style={[styles.buttonText, { color: Colors.ink }]}>Reset app data</Text>
         </TouchableOpacity>
       </View>
     );
@@ -51,8 +50,8 @@ export default class ErrorBoundary extends React.Component<{ children: React.Rea
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background, alignItems: 'center', justifyContent: 'center', padding: Spacing.xxl },
-  emoji: { fontSize: 48, marginBottom: Spacing.md },
-  title: { color: Colors.textPrimary, fontSize: FontSize.xl, fontWeight: '800', marginBottom: Spacing.sm },
+  // System fonts on purpose: this screen may show before the app's fonts have loaded.
+  title: { color: Colors.textPrimary, fontSize: FontSize.xxl, fontWeight: '600', marginBottom: Spacing.sm },
   message: { color: Colors.textSecondary, fontSize: FontSize.md, textAlign: 'center', lineHeight: 22, marginBottom: Spacing.xl },
   button: {
     width: '100%',
@@ -61,9 +60,10 @@ const styles = StyleSheet.create({
     borderRadius: BorderRadius.md,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: Colors.border,
+    borderColor: Colors.borderStrong,
+    backgroundColor: Colors.surface,
     marginBottom: Spacing.sm,
   },
-  primary: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  buttonText: { color: '#FFF', fontSize: FontSize.md, fontWeight: '700' },
+  primary: { backgroundColor: Colors.ink, borderColor: Colors.ink },
+  buttonText: { color: Colors.textInverse, fontSize: FontSize.md, fontWeight: '600' },
 });

@@ -1,11 +1,11 @@
 // ============================================================
-// VibeVault – Product image with graceful fallback
-// Shows a themed placeholder when offline or the image fails.
+// VibeVault – Product image with a graceful fallback
+// Shows a quiet placeholder (category icon + colour swatches) when
+// offline or when the marketplace image fails.
 // ============================================================
 
 import React, { useEffect, useState } from 'react';
 import { Image, ImageStyle, StyleProp, StyleSheet, View } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors } from '../../constants/theme';
 import { ItemCategory } from '../../types';
@@ -38,14 +38,8 @@ export default function ProductImage({ uri, style, category, colors, accessibili
 
   if (failed || !uri) {
     return (
-      <LinearGradient
-        colors={[Colors.surfaceLight, Colors.card]}
-        style={[styles.fallback, style as object]}
-        accessible
-        accessibilityRole="image"
-        accessibilityLabel={accessibilityLabel}
-      >
-        <Ionicons name={category ? CATEGORY_ICONS[category] : 'image-outline'} size={iconSize} color={Colors.textSecondary} />
+      <View style={[styles.fallback, style as object]} accessible accessibilityRole="image" accessibilityLabel={accessibilityLabel}>
+        <Ionicons name={category ? CATEGORY_ICONS[category] : 'image-outline'} size={iconSize} color={Colors.textMuted} />
         {colors && colors.length > 0 ? (
           <View style={styles.swatches}>
             {colors.slice(0, 3).map((color, index) => (
@@ -53,7 +47,7 @@ export default function ProductImage({ uri, style, category, colors, accessibili
             ))}
           </View>
         ) : null}
-      </LinearGradient>
+      </View>
     );
   }
 
@@ -69,8 +63,8 @@ export default function ProductImage({ uri, style, category, colors, accessibili
 }
 
 const styles = StyleSheet.create({
-  image: { backgroundColor: Colors.surfaceLight },
-  fallback: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  swatches: { flexDirection: 'row', gap: 4, marginTop: 6 },
-  swatch: { width: 10, height: 10, borderRadius: 5, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)' },
+  image: { backgroundColor: Colors.surfaceMuted },
+  fallback: { alignItems: 'center', justifyContent: 'center', overflow: 'hidden', backgroundColor: Colors.surfaceMuted },
+  swatches: { flexDirection: 'row', gap: 4, marginTop: 8 },
+  swatch: { width: 10, height: 10, borderRadius: 5, borderWidth: 1, borderColor: 'rgba(0,0,0,0.12)' },
 });

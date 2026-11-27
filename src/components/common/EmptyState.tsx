@@ -3,10 +3,10 @@
 // ============================================================
 
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { BorderRadius, Colors, FontSize, Spacing } from '../../constants/theme';
+import { Colors, Spacing, Type } from '../../constants/theme';
+import Button from '../ui/Button';
 
 interface EmptyStateProps {
   icon: React.ComponentProps<typeof Ionicons>['name'];
@@ -19,25 +19,29 @@ interface EmptyStateProps {
 export default function EmptyState({ icon, title, message, actionLabel, onAction }: EmptyStateProps) {
   return (
     <View style={styles.container}>
-      <Ionicons name={icon} size={44} color={Colors.textMuted} />
+      <View style={styles.icon}>
+        <Ionicons name={icon} size={26} color={Colors.ink} />
+      </View>
       <Text style={styles.title}>{title}</Text>
       {message ? <Text style={styles.message}>{message}</Text> : null}
-      {actionLabel && onAction ? (
-        <TouchableOpacity onPress={onAction} activeOpacity={0.85} accessibilityRole="button" style={styles.actionWrap}>
-          <LinearGradient colors={Colors.gradientPrimary} style={styles.action}>
-            <Text style={styles.actionText}>{actionLabel}</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-      ) : null}
+      {actionLabel && onAction ? <Button label={actionLabel} onPress={onAction} style={styles.action} /> : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { alignItems: 'center', paddingVertical: Spacing.xxxl, paddingHorizontal: Spacing.xl },
-  title: { color: Colors.textSecondary, fontSize: FontSize.lg, fontWeight: '700', marginTop: Spacing.md, textAlign: 'center' },
-  message: { color: Colors.textMuted, fontSize: FontSize.sm, marginTop: 6, textAlign: 'center', lineHeight: 18 },
-  actionWrap: { marginTop: Spacing.lg },
-  action: { paddingHorizontal: Spacing.xl, paddingVertical: Spacing.md, borderRadius: BorderRadius.full },
-  actionText: { color: '#FFF', fontSize: FontSize.md, fontWeight: '700' },
+  icon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  title: { ...Type.title, marginTop: Spacing.lg, textAlign: 'center' },
+  message: { ...Type.small, marginTop: Spacing.sm, textAlign: 'center', maxWidth: 320 },
+  action: { marginTop: Spacing.xl },
 });

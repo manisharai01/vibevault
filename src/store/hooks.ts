@@ -7,6 +7,7 @@
 import { useMemo } from 'react';
 import { matchesShopFor } from '../constants/marketplaces';
 import { QUEST_DEFINITIONS } from '../data/content';
+import { BuyTiming, getBuyTiming } from '../services/buyTiming';
 import { computeSustainability, getLevelInfo, LevelInfo, mergeQuest } from '../services/gamification';
 import { FashionItem, Offer, PriceAlert, Quest, SustainabilityMetrics, TrackRecord } from '../types';
 import { useStore } from './useStore';
@@ -49,6 +50,31 @@ export function isOfferCurrent(offer: Offer, now: Date = new Date()): boolean {
 export function useOffers(): Offer[] {
   const offers = useStore((s) => s.offers);
   return useMemo(() => offers.filter((o) => isOfferCurrent(o)), [offers]);
+}
+
+/** Sales announced in official feeds, still listed in the last 26 hours and not started yet. */
+export function useUpcomingSales(): Offer[] {
+  const offers = useStore((s) => s.upcomingOffers);
+  return useMemo(() => {
+    const now = Date.now();
+    return offers.filter((o) => !!o.startsAt && Date.parse(o.startsAt) > now && now - Date.parse(o.lastSeenAt) <= 26 * 3_600_000);
+  }, [offers]);
+}
+
+/** When to buy this listing (see services/buyTiming). */
+export function useBuyTiming(item: FashionItem | undefined): BuyTiming | null {
+  const sales = useUpcomingSales();
+  return useMemo(() => (item ? getBuyTiming(item, { now: new Date(), upcomingSales: sales }) : null), [item, sales]);
+}
+
+/** Recently opened listings that are still loaded, most recent first. */
+export function useRecentlyViewedItems(): FashionItem[] {
+  const ids = useStore((s) => s.recentlyViewed);
+  const items = useStore((s) => s.recommendedItems);
+  return useMemo(() => {
+    const byId = new Map(items.map((item) => [item.id, item]));
+    return ids.map((id) => byId.get(id)).filter((item): item is FashionItem => item !== undefined);
+  }, [ids, items]);
 }
 
 /** Coupons for one listing: the marketplace's promo on it, then the marketplace's store-wide offers. */

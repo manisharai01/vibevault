@@ -9,7 +9,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, NativeStackNavigationOptions } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { Colors, FontSize } from '../constants/theme';
+import { Colors, Fonts } from '../constants/theme';
 import { useUnseenTriggeredAlertCount } from '../store/hooks';
 import {
   ComposeStackParamList,
@@ -97,11 +97,11 @@ type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 
 const TAB_ICONS: Record<keyof RootTabParamList, { active: IoniconName; inactive: IoniconName }> = {
   Discover: { active: 'compass', inactive: 'compass-outline' },
-  Profiler: { active: 'sparkles', inactive: 'sparkles-outline' },
-  Compose: { active: 'shirt', inactive: 'shirt-outline' },
-  Prices: { active: 'pricetags', inactive: 'pricetags-outline' },
-  Quests: { active: 'trophy', inactive: 'trophy-outline' },
-  Profile: { active: 'person-circle', inactive: 'person-circle-outline' },
+  Profiler: { active: 'finger-print', inactive: 'finger-print-outline' },
+  Compose: { active: 'grid', inactive: 'grid-outline' },
+  Prices: { active: 'pricetag', inactive: 'pricetag-outline' },
+  Quests: { active: 'flag', inactive: 'flag-outline' },
+  Profile: { active: 'person', inactive: 'person-outline' },
 };
 
 export default function AppNavigator() {
@@ -115,18 +115,18 @@ export default function AppNavigator() {
       screenOptions={({ route }) => ({
         headerShown: false,
         tabBarStyle: [styles.tabBar, { height: 60 + bottomPadding, paddingBottom: bottomPadding }],
-        tabBarActiveTintColor: Colors.primaryLight,
+        tabBarActiveTintColor: Colors.ink,
         tabBarInactiveTintColor: Colors.textMuted,
         tabBarLabelStyle: styles.tabLabel,
         tabBarIcon: ({ focused, color }) => (
-          <View style={[styles.iconContainer, focused && styles.iconContainerActive]}>
-            <Ionicons name={focused ? TAB_ICONS[route.name].active : TAB_ICONS[route.name].inactive} size={20} color={color} />
+          <View style={styles.iconContainer}>
+            <Ionicons name={focused ? TAB_ICONS[route.name].active : TAB_ICONS[route.name].inactive} size={21} color={color} />
           </View>
         ),
       })}
     >
       <Tab.Screen name="Discover" component={DiscoverStackNav} options={{ tabBarLabel: 'Discover' }} />
-      <Tab.Screen name="Profiler" component={ProfilerScreen} options={{ tabBarLabel: 'My Vibe' }} />
+      <Tab.Screen name="Profiler" component={ProfilerScreen} options={{ tabBarLabel: 'Style' }} />
       <Tab.Screen name="Compose" component={ComposeStackNav} options={{ tabBarLabel: 'Stylist' }} />
       <Tab.Screen
         name="Prices"
@@ -151,23 +151,19 @@ const styles = StyleSheet.create({
     paddingTop: 6,
   },
   tabLabel: {
-    fontSize: FontSize.xs,
-    fontWeight: '600',
+    fontFamily: Fonts.medium,
+    fontSize: 11,
   },
   iconContainer: {
     width: 36,
-    height: 28,
-    borderRadius: 14,
+    height: 26,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  iconContainerActive: {
-    backgroundColor: Colors.primary + '30',
-  },
   badge: {
-    backgroundColor: Colors.accent,
-    color: '#FFF',
+    backgroundColor: Colors.offer,
+    color: Colors.textInverse,
+    fontFamily: Fonts.semibold,
     fontSize: 10,
-    fontWeight: '700',
   },
 });

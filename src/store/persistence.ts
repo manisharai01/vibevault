@@ -16,6 +16,7 @@ import {
   FitPreference,
   ItemCategory,
   Occasion,
+  OwnedPiece,
   PriceAlert,
   ProfilerAnswers,
   Purchase,
@@ -29,11 +30,14 @@ import {
   Trait,
   TraitScores,
   UserProfile,
+  WardrobeSlot,
 } from '../types';
 import { DAY_MS, toDateKey } from '../utils/date';
 
 export const STORE_NAME = 'vibevault-store-v1';
-export const STORE_VERSION = 4;
+export const STORE_VERSION = 5;
+export const MAX_OWNED_PIECES = 120;
+export const MAX_RECENTLY_VIEWED = 20;
 export const MAX_NAME_LENGTH = 24;
 export const DEFAULT_NAME = 'VibeVault User';
 const DEFAULT_CURRENCY = 'INR';
@@ -46,6 +50,10 @@ export interface PersistedState {
   questProgress: Record<string, QuestProgress>;
   purchases: Purchase[];
   streak: StreakState;
+  /** Pieces the user already owns (counted by the wardrobe plan). */
+  ownedPieces: OwnedPiece[];
+  /** Listing ids, most recent first. */
+  recentlyViewed: string[];
 }
 
 export function createDefaultProfile(now: Date = new Date(), locale?: string): UserProfile {
@@ -88,6 +96,8 @@ export function createDefaultPersistedState(now: Date = new Date()): PersistedSt
     questProgress: {},
     purchases: [],
     streak: { lastActiveDate: null, current: 0, longest: 0 },
+    ownedPieces: [],
+    recentlyViewed: [],
   };
 }
 
@@ -313,6 +323,39 @@ export function sanitizePurchases(v: unknown): Purchase[] {
   return purchases;
 }
 
+const WARDROBE_SLOTS: WardrobeSlot[] = ['top', 'bottom', 'dress', 'layer', 'shoes', 'bag', 'accessory'];
+
+export function sanitizeOwnedPieces(v: unknown): OwnedPiece[] {
+  if (!Array.isArray(v)) return [];
+  const pieces: OwnedPiece[] = [];
+  const seen = new Set<string>();
+  for (const raw of v) {
+    if (!isRecord(raw)) continue;
+    const id = asString(raw.id, '');
+    const slot = raw.slot as WardrobeSlot;
+    const title = asString(raw.title, '').trim().slice(0, 120);
+    if (!id || seen.has(id) || !WARDROBE_SLOTS.includes(slot) || !title) continue;
+    seen.add(id);
+    const itemId = typeof raw.itemId === 'string' && isListingId(raw.itemId) ? raw.itemId : null;
+    const image = typeof raw.image === 'string' && raw.image.startsWith('https://') ? raw.image : null;
+    pieces.push({
+      id,
+      slot,
+      title,
+      colors: colorList(raw.colors).slice(0, 4),
+      itemId,
+      image,
+      addedAt: isIsoDate(raw.addedAt) ? raw.addedAt : new Date().toISOString(),
+    });
+    if (pieces.length >= MAX_OWNED_PIECES) break;
+  }
+  return pieces;
+}
+
+export function sanitizeRecentlyViewed(v: unknown): string[] {
+  return [...new Set(asStringArray(v).filter((id) => isListingId(id)))].slice(0, MAX_RECENTLY_VIEWED);
+}
+
 export function sanitizeStreak(v: unknown): StreakState {
   if (!isRecord(v)) return { lastActiveDate: null, current: 0, longest: 0 };
   const current = Math.max(0, Math.floor(asNumber(v.current, 0)));
@@ -336,6 +379,8 @@ export function sanitizePersistedState(v: unknown, now: Date = new Date()): Part
     questProgress: sanitizeQuestProgress(v.questProgress),
     purchases: sanitizePurchases(v.purchases),
     streak: sanitizeStreak(v.streak),
+    ownedPieces: sanitizeOwnedPieces(v.ownedPieces),
+    recentlyViewed: sanitizeRecentlyViewed(v.recentlyViewed),
   };
 }
 
@@ -392,6 +437,8 @@ function migrateFromV1(persisted: UnknownRecord): UnknownRecord {
     questProgress,
     purchases: [],
     streak: { lastActiveDate: null, current: 0, longest: 0 },
+    ownedPieces: [],
+    recentlyViewed: [],
   };
 }
 
@@ -402,6 +449,7 @@ function migrateFromV1(persisted: UnknownRecord): UnknownRecord {
  *  keep their rupee amounts, the budget tier becomes a rupee budget, and the profile is marked
  *  for an update (the profiler now asks about country, sections, colours, fit and occasions).
  *  Style scores from v3 are kept until then.
+ *  v4 → v5: owned pieces and recently viewed listings (start empty; the sanitizer fills them in).
  */
 export function migratePersistedState(persisted: unknown, fromVersion: number): unknown {
   if (!isRecord(persisted)) return persisted;

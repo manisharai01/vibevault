@@ -1,57 +1,53 @@
 // ============================================================
-// VibeVault – Discovery Feed Screen (Objective 1)
-//
-// Personalised discovery feed: live listings for the user's
-// country, ranked by style match, with deal scores, the price
-// model's buy-or-wait advice and the reasons each piece matches.
+// VibeVault – Discover
+// Live listings for the user's country, ranked for them, with
+// editorial rails (your edit, good time to buy, worth the wait,
+// recently viewed) above a filterable grid. Every card says when
+// to buy it.
 // ============================================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { FlatList, RefreshControl, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { CompositeNavigationProp, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useShallow } from 'zustand/react/shallow';
-import { BorderRadius, Colors, FontSize, PLATFORM_COLORS, STYLE_COLORS, Shadows, Spacing } from '../constants/theme';
+import { BorderRadius, Colors, Fonts, FontSize, Spacing, Type } from '../constants/theme';
 import { CATEGORIES } from '../constants/marketplaces';
-import { useAvailableItems } from '../store/hooks';
+import { useAvailableItems, useRecentlyViewedItems, useUpcomingSales } from '../store/hooks';
 import { useStore } from '../store/useStore';
 import { FashionItem, ItemCategory } from '../types';
 import { DiscoverStackParamList, RootTabParamList } from '../navigation/types';
-import Tag from '../components/common/Tag';
-import ChipRow from '../components/common/ChipRow';
-import EmptyState from '../components/common/EmptyState';
-import ProductImage from '../components/common/ProductImage';
-import ScreenHeader from '../components/common/ScreenHeader';
 import CatalogStatusBanner from '../components/common/CatalogStatusBanner';
+import EmptyState from '../components/common/EmptyState';
+import Button from '../components/ui/Button';
+import { PageTitle, SectionHeader } from '../components/ui/Layout';
+import { ListingCard } from '../components/ui/Listing';
+import Pill, { PillRow } from '../components/ui/Pill';
+import { Sheet } from '../components/ui/Visuals';
 import { priceIn } from '../services/catalog';
+import { BuyTiming, getBuyTiming } from '../services/buyTiming';
 import { refreshAndNotify } from '../services/lifecycle';
-import { getBuyAdvice, getDealScore, isAtRecordLow } from '../services/priceEngine';
-import { formatMoney, percentOff } from '../utils/format';
+import { getDealScore } from '../services/priceEngine';
 
-type Nav = CompositeNavigationProp<
-  NativeStackNavigationProp<DiscoverStackParamList, 'DiscoverFeed'>,
-  BottomTabNavigationProp<RootTabParamList>
->;
+type Nav = CompositeNavigationProp<NativeStackNavigationProp<DiscoverStackParamList, 'DiscoverFeed'>, BottomTabNavigationProp<RootTabParamList>>;
 
 type SortKey = 'match' | 'deal' | 'price' | 'newest';
 type ConditionFilter = 'All' | 'New' | 'Pre-owned';
 
 const CATEGORY_OPTIONS: ('All' | ItemCategory)[] = ['All', ...CATEGORIES];
 const CONDITION_OPTIONS: ConditionFilter[] = ['All', 'New', 'Pre-owned'];
-const SORT_OPTIONS: { key: SortKey; label: string }[] = [
-  { key: 'match', label: 'Best Match' },
-  { key: 'deal', label: 'Best Deal Now' },
-  { key: 'price', label: 'Lowest Price' },
-  { key: 'newest', label: 'Newest' },
-];
+const SORT_LABELS: Record<SortKey, string> = { match: 'Best match', deal: 'Best deal', price: 'Lowest price', newest: 'Newest' };
+const RAIL_SIZE = 10;
 
 export default function DiscoverScreen() {
   const navigation = useNavigation<Nav>();
-  const recommendedItems = useAvailableItems();
-  const { wishlist, isProfileComplete, vibeSummary, toggleWishlist, marketplaces, homeCurrency, rates } = useStore(
+  const { width } = useWindowDimensions();
+  const items = useAvailableItems();
+  const recentlyViewed = useRecentlyViewedItems();
+  const sales = useUpcomingSales();
+  const { wishlist, isProfileComplete, vibeSummary, toggleWishlist, marketplaces, homeCurrency, rates, clearRecentlyViewed } = useStore(
     useShallow((s) => ({
       wishlist: s.profile.wishlist,
       isProfileComplete: s.isProfileComplete,
@@ -60,6 +56,7 @@ export default function DiscoverScreen() {
       marketplaces: s.marketplaces,
       homeCurrency: s.profile.currency,
       rates: s.fxRates,
+      clearRecentlyViewed: s.clearRecentlyViewed,
     })),
   );
 
@@ -68,9 +65,9 @@ export default function DiscoverScreen() {
   const [condition, setCondition] = useState<ConditionFilter>('All');
   const [sortBy, setSortBy] = useState<SortKey>('match');
   const [query, setQuery] = useState('');
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const mounted = useRef(true);
-
   useEffect(
     () => () => {
       mounted.current = false;
@@ -78,48 +75,60 @@ export default function DiscoverScreen() {
     [],
   );
 
-  // "Best Match" needs a style profile; fall back to deal score until then.
+  const saved = useMemo(() => new Set(wishlist), [wishlist]);
+  const timings = useMemo(() => {
+    const now = new Date();
+    return new Map<string, BuyTiming>(items.map((item) => [item.id, getBuyTiming(item, { now, upcomingSales: sales })]));
+  }, [items, sales]);
+
+  // "Best match" needs a style profile; fall back to the deal score until then.
+  const sortKeys: SortKey[] = isProfileComplete ? ['match', 'deal', 'price', 'newest'] : ['deal', 'price', 'newest'];
   const effectiveSort: SortKey = !isProfileComplete && sortBy === 'match' ? 'deal' : sortBy;
-  const sortOptions = isProfileComplete ? SORT_OPTIONS : SORT_OPTIONS.filter((o) => o.key !== 'match');
-  const wishlistSet = useMemo(() => new Set(wishlist), [wishlist]);
-  const hasFilters = category !== 'All' || platform !== 'All' || condition !== 'All' || query.trim().length > 0;
-  // Marketplaces that have listings in this feed.
-  const platformOptions = useMemo(() => ['All', ...new Set(recommendedItems.map((i) => i.source))], [recommendedItems]);
+  const filterCount = [category !== 'All', platform !== 'All', condition !== 'All'].filter(Boolean).length;
+  const searching = query.trim().length > 0;
+  const platformOptions = useMemo(() => ['All', ...new Set(items.map((i) => i.source))], [items]);
   const platformName = useCallback((source: string) => marketplaces.find((m) => m.source === source)?.name ?? source, [marketplaces]);
 
-  const filteredItems = useMemo(() => {
+  const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const items = recommendedItems.filter((item) => {
+    const filtered = items.filter((item) => {
       if (category !== 'All' && item.category !== category) return false;
       if (platform !== 'All' && item.source !== platform) return false;
       if (condition === 'New' && item.secondhand) return false;
       if (condition === 'Pre-owned' && !item.secondhand) return false;
       if (!q) return true;
-      return (
-        item.title.toLowerCase().includes(q) ||
-        (item.brand ?? '').toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q) ||
-        item.platform.toLowerCase().includes(q) ||
-        item.styleArchetypes.some((s) => s.toLowerCase().includes(q))
-      );
+      return [item.title, item.brand ?? '', item.category, item.platform, item.seller ?? '', ...item.styleArchetypes].some((field) => field.toLowerCase().includes(q));
     });
-    const sorted = [...items];
-    switch (effectiveSort) {
-      case 'price':
-        // Compare in the user's currency so listings in different currencies sort together.
-        sorted.sort((a, b) => (priceIn(a, homeCurrency, rates) ?? Infinity) - (priceIn(b, homeCurrency, rates) ?? Infinity));
-        break;
-      case 'newest':
-        sorted.sort((a, b) => b.firstSeen.localeCompare(a.firstSeen) || a.id.localeCompare(b.id));
-        break;
-      case 'deal':
-        sorted.sort((a, b) => getDealScore(b) - getDealScore(a));
-        break;
-      default:
-        break; // already ranked by match
-    }
+    const sorted = [...filtered];
+    if (effectiveSort === 'price') sorted.sort((a, b) => (priceIn(a, homeCurrency, rates) ?? Infinity) - (priceIn(b, homeCurrency, rates) ?? Infinity));
+    else if (effectiveSort === 'newest') sorted.sort((a, b) => b.firstSeen.localeCompare(a.firstSeen) || a.id.localeCompare(b.id));
+    else if (effectiveSort === 'deal') sorted.sort((a, b) => getDealScore(b) - getDealScore(a) || a.id.localeCompare(b.id));
     return sorted;
-  }, [recommendedItems, category, platform, condition, query, effectiveSort, homeCurrency, rates]);
+  }, [items, category, platform, condition, query, effectiveSort, homeCurrency, rates]);
+
+  // Browsing (no search, filter or custom sort): editorial rails above the rest of the grid.
+  // Each piece appears once on the page, so no listing (or its save button) shows twice.
+  const defaultSort: SortKey = isProfileComplete ? 'match' : 'deal';
+  const browsing = !searching && filterCount === 0 && effectiveSort === defaultSort;
+  const rails = useMemo(() => {
+    if (!browsing) return null;
+    const used = new Set<string>();
+    const take = (list: FashionItem[]) => {
+      const picked = list.filter((i) => !used.has(i.id)).slice(0, RAIL_SIZE);
+      for (const i of picked) used.add(i.id);
+      return picked;
+    };
+    // Recently viewed first: picking up where you left off is the most useful rail.
+    const recent = take(recentlyViewed);
+    const byTiming = (kinds: BuyTiming['kind'][]) => items.filter((i) => kinds.includes(timings.get(i.id)!.kind));
+    const buyNow = take(
+      byTiming(['buy-now']).sort((a, b) => (isProfileComplete ? b.matchScore - a.matchScore : getDealScore(b) - getDealScore(a)) || a.id.localeCompare(b.id)),
+    );
+    const wait = take(byTiming(['wait-sale', 'wait-days', 'wait-month']).sort((a, b) => (timings.get(b.id)!.saving ?? 0) - (timings.get(a.id)!.saving ?? 0) || a.id.localeCompare(b.id)));
+    const edit = isProfileComplete ? take(items) : [];
+    return { buyNow, wait, edit, recent, used };
+  }, [browsing, items, timings, isProfileComplete, recentlyViewed]);
+  const grid = useMemo(() => (rails ? results.filter((i) => !rails.used.has(i.id)) : results), [rails, results]);
 
   const clearFilters = useCallback(() => {
     setCategory('All');
@@ -130,379 +139,262 @@ export default function DiscoverScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    // Download the latest prices, then run alert checks and daily tasks.
     try {
       await refreshAndNotify({ force: true });
     } finally {
       if (mounted.current) setRefreshing(false);
     }
   }, []);
-
   const retry = useCallback(() => {
     refreshAndNotify({ force: true }).catch(() => undefined);
   }, []);
 
   const openItem = useCallback((itemId: string) => navigation.navigate('ItemDetail', { itemId }), [navigation]);
+  const gridWidth = Math.min(width, 900);
+  const columns = gridWidth >= 700 ? 3 : 2;
+  const cardWidth = (gridWidth - Spacing.lg * 2 - Spacing.md * (columns - 1)) / columns;
 
-  const renderItem = useCallback(
-    ({ item }: { item: FashionItem }) => (
-      <DiscoverCard
-        item={item}
-        isWishlisted={wishlistSet.has(item.id)}
-        showMatch={isProfileComplete}
-        onPress={openItem}
-        onToggleWishlist={toggleWishlist}
-      />
-    ),
-    [wishlistSet, isProfileComplete, openItem, toggleWishlist],
-  );
+  const rail = (title: string, eyebrow: string, list: FashionItem[], action?: { label: string; onPress: () => void; a11y: string }) =>
+    list.length > 0 ? (
+      <View>
+        <SectionHeader eyebrow={eyebrow} title={title} action={action?.label} onAction={action?.onPress} actionLabel={action?.a11y} />
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.rail}>
+          {list.map((item) => (
+            <ListingCard
+              key={item.id}
+              item={item}
+              timing={timings.get(item.id) ?? null}
+              saved={saved.has(item.id)}
+              showMatch={isProfileComplete}
+              onOpen={openItem}
+              onToggleSave={toggleWishlist}
+              width={156}
+            />
+          ))}
+        </ScrollView>
+      </View>
+    ) : null;
 
-  const listHeader = (
+  const header = (
     <View>
-      {!isProfileComplete && (
-        <TouchableOpacity
-          style={styles.profileCta}
-          onPress={() => navigation.navigate('Profiler')}
-          activeOpacity={0.85}
-          accessibilityRole="button"
-        >
-          <LinearGradient colors={Colors.gradientPrimary} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.profileCtaInner}>
-            <Ionicons name="sparkles" size={22} color="#FFF" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.profileCtaTitle}>Find your vibe in 2 minutes</Text>
-              <Text style={styles.profileCtaText}>Take the Style Profiler to unlock personalised match scores.</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#FFF" />
-          </LinearGradient>
-        </TouchableOpacity>
-      )}
-      <ChipRow options={CATEGORY_OPTIONS} selected={category} onSelect={setCategory} accessibilityLabel="Category" />
-      {platformOptions.length > 2 && (
-        <ChipRow
-          options={platformOptions}
-          selected={platform}
-          onSelect={setPlatform}
-          accessibilityLabel="Marketplace"
-          getLabel={(source) => (source === 'All' ? 'All marketplaces' : platformName(source))}
-          compact
-        />
-      )}
-      <ChipRow options={CONDITION_OPTIONS} selected={condition} onSelect={setCondition} accessibilityLabel="Condition" compact />
-      {recommendedItems.length > 0 && <CatalogStatusBanner itemCount={recommendedItems.length} onRetry={retry} />}
-      <View style={styles.sortRow}>
-        {sortOptions.map((option) => {
-          const active = effectiveSort === option.key;
-          return (
-            <TouchableOpacity
-              key={option.key}
-              style={[styles.sortBtn, active && styles.sortBtnActive]}
-              onPress={() => setSortBy(option.key)}
-              accessibilityRole="button"
-              aria-selected={active}
-            >
-              <Text style={[styles.sortBtnText, active && styles.sortBtnTextActive]}>{option.label}</Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-      <View style={styles.resultsRow}>
-        <Text style={styles.resultsText}>
-          {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'}
-        </Text>
-        {/* With no results, the empty state below carries the only "Clear filters" button. */}
-        {hasFilters && filteredItems.length > 0 && (
-          <TouchableOpacity onPress={clearFilters} accessibilityRole="button" hitSlop={8}>
-            <Text style={styles.clearText}>Clear filters</Text>
+      <PageTitle
+        eyebrow={isProfileComplete ? 'Picked for you' : 'Live prices'}
+        title="Discover"
+        subtitle={isProfileComplete && vibeSummary ? vibeSummary : 'Real listings from real shops, with when to buy each one.'}
+      >
+        <View style={styles.searchRow}>
+          <View style={styles.search}>
+            <Ionicons name="search" size={17} color={Colors.textMuted} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search brands, styles, pieces"
+              placeholderTextColor={Colors.textMuted}
+              value={query}
+              onChangeText={setQuery}
+              returnKeyType="search"
+              autoCorrect={false}
+              autoCapitalize="none"
+              accessibilityLabel="Search listings"
+            />
+            {query.length > 0 ? (
+              <TouchableOpacity onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={8}>
+                <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <TouchableOpacity
+            style={[styles.filterButton, filterCount > 0 && styles.filterButtonActive]}
+            onPress={() => setFiltersOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel={filterCount > 0 ? `Filters, ${filterCount} on` : 'Filters'}
+          >
+            <Ionicons name="options-outline" size={18} color={filterCount > 0 ? Colors.textInverse : Colors.ink} />
+            {filterCount > 0 ? <Text style={styles.filterCount}>{filterCount}</Text> : null}
           </TouchableOpacity>
-        )}
-      </View>
+        </View>
+      </PageTitle>
+
+      {items.length > 0 ? <CatalogStatusBanner itemCount={items.length} onRetry={retry} /> : null}
+
+      {!isProfileComplete && items.length > 0 ? (
+        <TouchableOpacity style={styles.onboard} onPress={() => navigation.navigate('Profiler')} accessibilityRole="button" activeOpacity={0.9}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.onboardEyebrow}>Two minutes</Text>
+            <Text style={styles.onboardTitle}>Find your style</Text>
+            <Text style={styles.onboardText}>A short personality quiz ranks every listing for you and plans your whole wardrobe.</Text>
+          </View>
+          <Ionicons name="arrow-forward" size={22} color={Colors.textInverse} />
+        </TouchableOpacity>
+      ) : null}
+
+      {rails ? (
+        <>
+          {rail('Recently viewed', 'Pick up where you left off', rails.recent, {
+            label: 'Clear',
+            onPress: clearRecentlyViewed,
+            a11y: 'Clear recently viewed',
+          })}
+          {rail('Your edit', 'Matched to your style', rails.edit)}
+          {rail('Good time to buy', 'Buy now', rails.buyNow)}
+          {rail('Worth the wait', 'Likely cheaper soon', rails.wait)}
+        </>
+      ) : null}
+
+      {items.length > 0 ? (
+        <>
+          <SectionHeader
+            eyebrow={`${(rails ? items : results).length} ${(rails ? items : results).length === 1 ? 'piece' : 'pieces'}`}
+            title={rails ? 'More pieces' : 'Results'}
+          />
+          <PillRow
+            options={sortKeys}
+            selected={effectiveSort}
+            onSelect={setSortBy}
+            getLabel={(k) => SORT_LABELS[k]}
+            accessibilityLabel="Sort"
+            size="sm"
+          />
+          <View style={{ height: Spacing.md }} />
+        </>
+      ) : null}
     </View>
   );
 
   return (
     <View style={styles.container}>
-      <ScreenHeader
-        title="Discover"
-        subtitle={isProfileComplete && vibeSummary ? vibeSummary : 'Live prices from real marketplaces, ranked for you.'}
-      >
-        <View style={styles.searchContainer}>
-          <Ionicons name="search" size={16} color={Colors.textMuted} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search brands, styles, items..."
-            placeholderTextColor={Colors.textMuted}
-            value={query}
-            onChangeText={setQuery}
-            returnKeyType="search"
-            autoCorrect={false}
-            autoCapitalize="none"
-            accessibilityLabel="Search listings"
-          />
-          {query.length > 0 && (
-            <TouchableOpacity onPress={() => setQuery('')} accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={8}>
-              <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
-            </TouchableOpacity>
-          )}
-        </View>
-      </ScreenHeader>
-
       <FlatList
-        data={filteredItems}
+        key={columns}
+        data={grid}
         keyExtractor={(item) => item.id}
-        renderItem={renderItem}
-        ListHeaderComponent={listHeader}
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        initialNumToRender={4}
-        windowSize={7}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} colors={[Colors.primary]} />}
+        numColumns={columns}
+        columnWrapperStyle={styles.columns}
+        renderItem={({ item }) => (
+          <ListingCard
+            item={item}
+            timing={timings.get(item.id) ?? null}
+            saved={saved.has(item.id)}
+            showMatch={isProfileComplete}
+            onOpen={openItem}
+            onToggleSave={toggleWishlist}
+            width={cardWidth}
+          />
+        )}
+        ListHeaderComponent={header}
         ListEmptyComponent={
-          recommendedItems.length === 0 ? (
+          items.length === 0 ? (
             <CatalogStatusBanner itemCount={0} onRetry={retry} />
           ) : (
             <EmptyState
               icon="search-outline"
-              title="No items match your filters"
-              message="Try a different search, category, marketplace or condition."
+              title="No pieces match"
+              message="Try a different search, or clear the filters."
               actionLabel="Clear filters"
               onAction={clearFilters}
             />
           )
         }
+        contentContainerStyle={styles.list}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        initialNumToRender={6}
+        windowSize={7}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.ink} colors={[Colors.ink]} />}
       />
+
+      <Sheet visible={filtersOpen} title="Filters" closeLabel="Done" onClose={() => setFiltersOpen(false)}>
+        <Text style={styles.sheetLabel}>Category</Text>
+        <View style={styles.wrap}>
+          {CATEGORY_OPTIONS.map((c) => (
+            <Pill key={c} label={c} selected={category === c} onPress={() => setCategory(c)} accessibilityLabel={`Category: ${c}`} />
+          ))}
+        </View>
+        {platformOptions.length > 2 ? (
+          <>
+            <Text style={styles.sheetLabel}>Shop</Text>
+            <View style={styles.wrap}>
+              {platformOptions.map((p) => (
+                <Pill
+                  key={p}
+                  label={p === 'All' ? 'All shops' : platformName(p)}
+                  selected={platform === p}
+                  onPress={() => setPlatform(p)}
+                  accessibilityLabel={`Shop: ${p === 'All' ? 'All shops' : platformName(p)}`}
+                />
+              ))}
+            </View>
+          </>
+        ) : null}
+        <Text style={styles.sheetLabel}>Condition</Text>
+        <View style={styles.wrap}>
+          {CONDITION_OPTIONS.map((c) => (
+            <Pill key={c} label={c} selected={condition === c} onPress={() => setCondition(c)} accessibilityLabel={`Condition: ${c}`} />
+          ))}
+        </View>
+        <Text style={styles.sheetCount}>
+          {results.length} {results.length === 1 ? 'piece matches' : 'pieces match'}
+        </Text>
+        {filterCount > 0 ? <Button label="Reset filters" variant="secondary" onPress={clearFilters} style={{ marginTop: Spacing.md }} /> : null}
+      </Sheet>
     </View>
   );
 }
 
-interface DiscoverCardProps {
-  item: FashionItem;
-  isWishlisted: boolean;
-  showMatch: boolean;
-  onPress: (itemId: string) => void;
-  onToggleWishlist: (itemId: string) => void;
-}
-
-const DiscoverCard = React.memo(function DiscoverCard({ item, isWishlisted, showMatch, onPress, onToggleWishlist }: DiscoverCardProps) {
-  const dealScore = getDealScore(item);
-  const savings = percentOff(item.currentPrice, item.originalPrice);
-  const advice = getBuyAdvice(item);
-  const recordLow = isAtRecordLow(item);
-  const matchGradient =
-    item.matchScore >= 80 ? Colors.gradientEco : item.matchScore >= 60 ? Colors.gradientPrimary : Colors.gradientAccent;
-
-  return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      style={styles.card}
-      onPress={() => onPress(item.id)}
-      accessibilityRole="button"
-      accessibilityLabel={`${item.title}, ${formatMoney(item.currentPrice, item.currency)} on ${item.platform}${showMatch ? `, ${item.matchScore}% match` : ''}`}
-      // Screen readers treat the card as one element, so expose the heart as an action.
-      accessibilityActions={[
-        { name: 'activate' },
-        { name: 'toggleWishlist', label: isWishlisted ? 'Remove from wishlist' : 'Save to wishlist' },
-      ]}
-      onAccessibilityAction={(event) => {
-        if (event.nativeEvent.actionName === 'toggleWishlist') onToggleWishlist(item.id);
-        else if (event.nativeEvent.actionName === 'activate') onPress(item.id);
-      }}
-    >
-      <View style={styles.imageContainer}>
-        <ProductImage uri={item.image} style={styles.image} category={item.category} colors={item.colors} iconSize={40} />
-
-        {showMatch && (
-          <View style={styles.matchBadge}>
-            <LinearGradient colors={matchGradient} style={styles.matchBadgeGradient}>
-              <Text style={styles.matchScoreText}>{item.matchScore}%</Text>
-              <Text style={styles.matchLabel}>match</Text>
-            </LinearGradient>
-          </View>
-        )}
-
-        <TouchableOpacity
-          style={styles.wishlistBtn}
-          onPress={() => onToggleWishlist(item.id)}
-          accessibilityRole="button"
-          accessibilityLabel={isWishlisted ? `Remove ${item.title} from wishlist` : `Save ${item.title} to wishlist`}
-          aria-selected={isWishlisted}
-          hitSlop={6}
-        >
-          <Text style={styles.wishlistIcon}>{isWishlisted ? '❤️' : '🤍'}</Text>
-        </TouchableOpacity>
-
-        {savings >= 40 && (
-          <View style={styles.savingsBadge}>
-            <Text style={styles.savingsText}>-{savings}%</Text>
-          </View>
-        )}
-
-        <View style={[styles.platformTag, { backgroundColor: PLATFORM_COLORS[item.source] || Colors.primary }]}>
-          <Text style={styles.platformText}>{item.source === 'google_shopping' && item.seller ? item.seller : item.siteName}</Text>
-        </View>
-      </View>
-
-      <View style={styles.cardInfo}>
-        <Text style={styles.itemTitle} numberOfLines={2}>
-          {item.title}
-        </Text>
-        <Text style={styles.brandText} numberOfLines={1}>
-          {[item.brand, item.secondhand ? item.condition : 'New', item.size].filter(Boolean).join(' · ')}
-        </Text>
-
-        <View style={styles.tagRow}>
-          {item.styleArchetypes.slice(0, 3).map((s) => (
-            <Tag key={s} label={s} color={STYLE_COLORS[s]} selected small />
-          ))}
-        </View>
-
-        <View style={styles.priceRow}>
-          <View style={styles.priceInfo}>
-            <Text style={styles.currentPrice}>{formatMoney(item.currentPrice, item.currency)}</Text>
-            {item.originalPrice !== null && (
-              <Text style={styles.originalPrice}>{formatMoney(item.originalPrice, item.currency)}</Text>
-            )}
-          </View>
-          <View style={styles.metricsRow}>
-            <Text style={styles.metric} accessibilityLabel={`Deal score ${dealScore}`}>
-              🔥 {dealScore}
-            </Text>
-            {item.secondhand && <Text style={styles.metric}>♻️ Pre-owned</Text>}
-          </View>
-        </View>
-
-        {(recordLow || advice) && (
-          <View style={[styles.predictionHint, advice?.verdict === 'buy' || recordLow ? styles.hintBuy : null]}>
-            <Text style={styles.predictionText}>
-              {recordLow
-                ? '🏷️ Lowest price recorded for this listing'
-                : advice?.verdict === 'wait'
-                  ? `⏳ ${Math.round(advice.pDrop * 100)}% chance it gets ≥5% cheaper within ${advice.horizon} days`
-                  : advice?.verdict === 'buy'
-                    ? `🟢 Buy now — only ${Math.round(advice.pDrop * 100)}% chance of a 5%+ drop in ${advice.horizon} days`
-                    : `⚖️ ${Math.round(advice!.pDrop * 100)}% chance of a 5%+ drop in ${advice!.horizon} days`}
-            </Text>
-          </View>
-        )}
-        {showMatch && item.matchReasons[0] && <Text style={styles.reasonText}>✓ {item.matchReasons.slice(0, 2).join(' · ')}</Text>}
-      </View>
-    </TouchableOpacity>
-  );
-});
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  list: { paddingBottom: Spacing.xxxl },
+  columns: { paddingHorizontal: Spacing.lg, gap: Spacing.md, marginBottom: Spacing.md },
+  rail: { paddingHorizontal: Spacing.lg, gap: Spacing.md },
 
-  searchContainer: {
+  searchRow: { flexDirection: 'row', gap: Spacing.sm, marginTop: Spacing.lg },
+  search: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.sm,
+    height: 46,
     backgroundColor: Colors.surface,
     borderRadius: BorderRadius.md,
     paddingHorizontal: Spacing.md,
     borderWidth: 1,
     borderColor: Colors.border,
-    marginTop: Spacing.md,
   },
-  searchInput: { flex: 1, color: Colors.textPrimary, fontSize: FontSize.md, paddingVertical: Spacing.sm + 2 },
-
-  profileCta: { marginHorizontal: Spacing.lg, marginTop: Spacing.md, marginBottom: Spacing.sm, borderRadius: BorderRadius.lg, overflow: 'hidden' },
-  profileCtaInner: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, padding: Spacing.lg },
-  profileCtaTitle: { color: '#FFF', fontSize: FontSize.md, fontWeight: '800' },
-  profileCtaText: { color: 'rgba(255,255,255,0.85)', fontSize: FontSize.sm, marginTop: 2 },
-
-  sortRow: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: Spacing.lg, paddingTop: Spacing.sm, gap: Spacing.xs },
-  sortBtn: { paddingHorizontal: Spacing.md, paddingVertical: 6, borderRadius: BorderRadius.full, backgroundColor: Colors.surface },
-  sortBtnActive: { backgroundColor: Colors.primaryDark },
-  sortBtnText: { color: Colors.textMuted, fontSize: FontSize.xs, fontWeight: '600' },
-  sortBtnTextActive: { color: Colors.primaryLight },
-
-  resultsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.sm,
-  },
-  resultsText: { color: Colors.textMuted, fontSize: FontSize.sm },
-  clearText: { color: Colors.primaryLight, fontSize: FontSize.sm, fontWeight: '700' },
-
-  listContent: { paddingBottom: Spacing.xxl },
-
-  card: {
-    backgroundColor: Colors.card,
-    borderRadius: BorderRadius.lg,
-    marginHorizontal: Spacing.lg,
-    marginBottom: Spacing.lg,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    overflow: 'hidden',
-    ...Shadows.card,
-  },
-  imageContainer: { height: 220 },
-  image: { width: '100%', height: '100%' },
-
-  matchBadge: { position: 'absolute', top: Spacing.sm, left: Spacing.sm },
-  matchBadgeGradient: { paddingHorizontal: Spacing.sm, paddingVertical: 4, borderRadius: BorderRadius.sm, alignItems: 'center' },
-  matchScoreText: { color: '#FFF', fontSize: FontSize.lg, fontWeight: '800' },
-  matchLabel: { color: 'rgba(255,255,255,0.85)', fontSize: FontSize.xs },
-
-  wishlistBtn: {
-    position: 'absolute',
-    top: Spacing.sm,
-    right: Spacing.sm,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+  searchInput: { flex: 1, fontFamily: Fonts.regular, color: Colors.ink, fontSize: FontSize.md, paddingVertical: 0 },
+  filterButton: {
+    width: 46,
+    height: 46,
+    borderRadius: BorderRadius.md,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
-  wishlistIcon: { fontSize: 18 },
-
-  savingsBadge: {
+  filterButtonActive: { backgroundColor: Colors.ink, borderColor: Colors.ink },
+  filterCount: {
     position: 'absolute',
-    bottom: Spacing.sm,
-    left: Spacing.sm,
-    backgroundColor: Colors.error,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 2,
-    borderRadius: BorderRadius.sm,
+    top: 6,
+    right: 6,
+    fontFamily: Fonts.bold,
+    fontSize: 10,
+    color: Colors.textInverse,
   },
-  savingsText: { color: '#FFF', fontSize: FontSize.sm, fontWeight: '700' },
 
-  platformTag: {
-    position: 'absolute',
-    bottom: Spacing.sm,
-    right: Spacing.sm,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 2,
-    borderRadius: BorderRadius.sm,
+  onboard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    marginHorizontal: Spacing.lg,
+    marginTop: Spacing.lg,
+    padding: Spacing.xl,
+    borderRadius: BorderRadius.xl,
+    backgroundColor: Colors.ink,
   },
-  platformText: { color: '#FFF', fontSize: FontSize.xs, fontWeight: '700' },
+  onboardEyebrow: { ...Type.eyebrow, color: 'rgba(255,255,255,0.6)' },
+  onboardTitle: { fontFamily: Fonts.display, fontSize: FontSize.xxxl, lineHeight: 38, color: Colors.textInverse, marginTop: 4 },
+  onboardText: { fontFamily: Fonts.regular, fontSize: FontSize.sm, lineHeight: 19, color: 'rgba(255,255,255,0.78)', marginTop: 6 },
 
-  cardInfo: { padding: Spacing.md },
-  itemTitle: { fontSize: FontSize.lg, fontWeight: '700', color: Colors.textPrimary, marginBottom: 4 },
-  brandText: { color: Colors.textSecondary, fontSize: FontSize.sm, marginBottom: Spacing.sm },
-  tagRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: Spacing.sm },
-
-  priceRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: Spacing.sm },
-  priceInfo: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.sm },
-  currentPrice: { fontSize: FontSize.xl, fontWeight: '800', color: Colors.success },
-  originalPrice: { fontSize: FontSize.sm, color: Colors.textMuted, textDecorationLine: 'line-through' },
-  metricsRow: { flexDirection: 'row', gap: Spacing.md },
-  metric: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600' },
-
-  predictionHint: {
-    marginTop: Spacing.sm,
-    paddingVertical: 4,
-    paddingHorizontal: Spacing.sm,
-    backgroundColor: Colors.primaryDark + '30',
-    borderRadius: BorderRadius.sm,
-  },
-  predictionText: { color: Colors.primaryLight, fontSize: FontSize.xs },
-  hintBuy: { backgroundColor: Colors.success + '25' },
-  reasonText: { color: Colors.textMuted, fontSize: FontSize.xs, marginTop: Spacing.sm },
+  sheetLabel: { ...Type.eyebrow, marginTop: Spacing.lg, marginBottom: Spacing.sm },
+  wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm },
+  sheetCount: { ...Type.small, marginTop: Spacing.xl },
 });

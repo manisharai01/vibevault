@@ -18,7 +18,8 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   const rows = backend.rows();
   const total = rows.length;
   const womenAndUnisex = rows.filter((r) => r.department !== 'men').length;
-  const countText = (n: number) => `${n} ${n === 1 ? 'item' : 'items'}`;
+  /** The results eyebrow above the grid (small caps, so upper case in the page text). */
+  const countText = (n: number) => `${n} ${n === 1 ? 'PIECE' : 'PIECES'}`;
 
   const opened = () => page.evaluate(() => window.__opened.slice());
   const expectOpened = async (prefix: string) => {
@@ -36,6 +37,15 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
         .filter((el) => el.checkVisibility({ checkOpacity: true }) && !el.closest('[aria-hidden="true"]'))
         .map((el) => el.getAttribute('aria-label')!)
         .filter((l) => / on [^,]+(, \d+% match|, deal score \d+)?$/.test(l) && !/^(Save|Remove) /.test(l)),
+    );
+  const labelsMatching = (pattern: string) =>
+    page.evaluate(
+      (p) =>
+        [...document.querySelectorAll('[aria-label]')]
+          .filter((el) => el.checkVisibility({ checkOpacity: true }) && !el.closest('[aria-hidden="true"]'))
+          .map((el) => el.getAttribute('aria-label')!)
+          .filter((l) => new RegExp(p).test(l)),
+      pattern,
     );
   const selected = (text: string) =>
     page.evaluate(
@@ -61,40 +71,52 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
       scrollers.sort((a, b) => b.clientHeight - a.clientHeight);
       scrollers[0]?.scrollTo({ top: scrollers[0].scrollHeight });
     });
+  /** Opens the Discover filters sheet, does something in it and closes it with "Done". */
+  const filters = async (pick: () => Promise<void>) => {
+    await h.tapLabelPrefix('Filters');
+    await h.expectText('match'); // the live count in the sheet ("N pieces match")
+    await pick();
+    await h.tapExact('Done');
+    await h.pause(300);
+  };
 
   // ------------------------------------------------------------------ Discover (no profile yet)
   h.step = 'discover';
   await page.goto(base, { waitUntil: 'networkidle0' });
-  await h.expectText('Live prices from real marketplaces, ranked for you.');
+  await h.expectText('Real listings from real shops, with when to buy each one.');
   await h.expectText('Live prices from Flipkart, Amazon, eBay, Google Shopping');
-  await h.expectText('Find your vibe in 2 minutes');
+  await h.expectText('Find your style');
+  await h.expectText('Good time to buy');
+  await h.expectText('Worth the wait');
   await h.expectText(countText(total));
   await h.audit('Discover');
   await h.shot('discover');
 
-  await h.tapExact('Lowest Price');
-  await expectSelected('Lowest Price');
-  const cheapest = (await cardLabels())[0];
-  if (!cheapest?.startsWith('Gold Hoop Earrings, ₹399')) throw new Error(`Lowest Price should list the ₹399 earrings first, got ${cheapest}`);
-  await h.tapExact('Newest');
+  await h.tapLabel('Sort: Lowest price');
+  await expectSelected('Lowest price');
+  if (!(await cardLabels()).some((l) => l.startsWith('Gold Hoop Earrings, ₹399'))) throw new Error('Lowest price should list the ₹399 earrings');
+  await h.tapLabel('Sort: Newest');
   await expectSelected('Newest');
-  await h.tapExact('Best Deal Now');
-  await expectSelected('Best Deal Now');
+  await h.tapLabel('Sort: Best deal');
+  await expectSelected('Best deal');
 
-  await h.tapLabel('Category: Shoes');
+  await filters(() => h.tapLabel('Category: Shoes'));
   await h.expectText(countText(rows.filter((r) => r.category === 'Shoes').length));
+  await h.expectLabel('Filters, 1 on');
+  await filters(() => h.tapExact('Reset filters'));
+  await h.expectText(countText(total));
+  await filters(async () => {
+    await h.tapLabel('Shop: eBay');
+    await h.tapLabel('Condition: New');
+    await h.audit('Discover: filters sheet');
+  });
+  await h.expectText('No pieces match');
+  await h.audit('Discover (no results)');
   await h.tapExact('Clear filters');
   await h.expectText(countText(total));
-  await h.tapLabel('Marketplace: eBay');
+  await filters(() => h.tapLabel('Condition: Pre-owned'));
   await h.expectText(countText(1));
-  await h.tapLabel('Condition: New');
-  await h.expectText('No items match your filters');
-  await h.audit('Discover (no results)'); // only one "Clear filters"
-  await h.tapExact('Clear filters');
-  await h.expectText(countText(total));
-  await h.tapLabel('Condition: Pre-owned');
-  await h.expectText(countText(1));
-  await h.tapLabel('Condition: All');
+  await filters(() => h.tapLabel('Condition: All'));
   await h.type('Search listings', 'blazer');
   await h.expectText(countText(1));
   await h.tapLabel('Clear search');
@@ -113,22 +135,21 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.expectText('Where do you shop?'); // the country picker on Profile
   await h.audit('Profile: country picker from Deals');
   await h.tapExact('Close');
-  await h.expectText('Shopping Settings');
+  await h.expectText('Currency for totals & budget');
   await h.tab('Deals');
   await h.tapExact('Top deals');
   await h.tab('Discover');
+  await h.tapText('Find your style');
 
-  await h.tapText('Find your vibe in 2 minutes');
-
-  // ------------------------------------------------------------------ Style Profiler
-  h.step = 'profiler';
+  // ------------------------------------------------------------------ Style quiz
+  h.step = 'quiz';
   await h.expectText('Where do you shop?');
   await h.expectText('LIVE PRICES NOW'); // text-transform: uppercase
-  await h.audit('Profiler: country');
+  await h.audit('Quiz: country');
   await h.tapExact(`${flag('IN')} India`);
   await next();
   await h.expectText('Which sections should we style you from?');
-  await h.tapExact("👗 Women's");
+  await h.tapExact("Women's");
   await next();
   await h.expectText('At a party, you are usually');
   await h.tapLabel('Previous question');
@@ -155,7 +176,7 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await next();
   await h.expectText('What do you usually spend on one piece, at most?');
   await h.expectText('Suggestions are the 25th–90th percentile');
-  await h.audit('Profiler: budget');
+  await h.audit('Quiz: budget');
   const suggestion = await page.evaluate(
     () => [...document.querySelectorAll('[role="radio"]')].map((el) => (el as HTMLElement).innerText.trim()).find((t) => t.startsWith('Up to ')) ?? null,
   );
@@ -169,7 +190,7 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.expectText('Strong preference');
   await next();
   await h.expectText('Would you wear these?');
-  await h.audit('Profiler: taste check');
+  await h.audit('Quiz: taste check');
   await h.shot('taste-check');
   const tasteItems = await page.evaluate(() =>
     [...document.querySelectorAll('[aria-label^="I\'d wear it: "]')].map((el) => el.getAttribute('aria-label')!.slice("I'd wear it: ".length)),
@@ -178,120 +199,143 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   for (const [i, title] of tasteItems.slice(0, 4).entries()) await h.tapLabel(i < 3 ? `I'd wear it: ${title}` : `Not for me: ${title}`);
   await h.tapLabel('See my style profile');
   await h.pause(600);
-  await h.expectText('Your Style Profile');
-  await h.expectText('Your Style DNA');
+  await h.expectText('YOUR STYLE REPORT');
+  await h.expectText('Your style DNA');
   await h.expectText('Your answers say you');
-  await h.expectText(`India · INR`);
+  await h.expectText('India · INR');
   await h.expectText('Up to ₹2,000');
-  await h.audit('My Vibe: results');
-  await h.shot('style-profile');
+  await h.audit('Style report');
+  await h.shot('style-report');
 
-  const topMatch = await page.evaluate(
-    () => [...document.querySelectorAll('[aria-label$="% match"]')].find((el) => el.checkVisibility({ checkOpacity: true }) && !el.closest('[aria-hidden="true"]'))?.getAttribute('aria-label') ?? null,
-  );
-  if (!topMatch) throw new Error('No top matches on the results');
+  const [topMatch] = await labelsMatching(', \\d+% match$');
+  if (!topMatch) throw new Error('No top matches on the report');
   await h.tapLabel(topMatch);
   await h.expectLabel('Go back');
-  await h.expectText(topMatch.replace(/, \d+% match$/, ''));
   await h.tapLabel('Go back');
-  await h.expectText('Live prices from Flipkart'); // Discover, profiled
-  await h.tab('My Vibe');
-  await h.tapText('See outfits built for you');
-  await h.expectText('Your Stylist');
-  await h.tab('My Vibe');
-  await h.tapText('Retake the Profiler');
+  await h.expectText('PICKED FOR YOU'); // Discover, now personalised
+  await h.tapLabel('Sort: Best match'); // back to browsing (the sort chosen earlier was Best deal)
+  await h.expectText('Your edit');
+  await h.tab('Style');
+  await h.tapText('See your whole wardrobe');
+  await h.expectText('Your wardrobe');
+  await h.tab('Style');
+  await h.tapText('Retake the quiz');
   await h.expectText('Where do you shop?');
-  await h.audit('Profiler: retake');
+  await h.audit('Quiz: retake');
   await h.tapExact('Cancel');
-  await h.expectText('Your Style Profile');
+  await h.expectText('Your style DNA');
 
-  // ------------------------------------------------------------------ Stylist
-  h.step = 'stylist';
+  // ------------------------------------------------------------------ Stylist: whole wardrobe and looks
+  h.step = 'wardrobe';
   await h.tab('Stylist');
-  await h.expectText('Look 1 of');
-  await h.audit('Stylist: outfits');
-  await h.shot('stylist');
+  await h.expectText('Your wardrobe');
+  await h.expectText('outfits');
+  await h.expectText('WHY THIS PLAN');
+  await h.expectText('Work & office: two more shirts or blouses and smart trousers.');
+  await h.audit('Stylist: wardrobe');
+  await h.shot('wardrobe');
+  await h.expectDialog(() => h.tapExact('Save every pick'), /Wardrobe saved/);
+  await h.tapLabel('Add shoes you own');
+  await h.expectText('Add shoes you own');
+  await h.audit('Stylist: add an owned piece');
+  await h.tapLabel('Kind: Top');
+  await h.expectText('Add top you own');
+  await h.tapLabel('Kind: Shoes');
+  await h.expectText('Add shoes you own');
+  await h.type('Name of the piece you own', 'My white trainers');
+  await h.tapLabel('Colour: White');
+  await h.tapExact('Add to wardrobe');
+  await h.expectText('My white trainers');
+  await h.tapLabel('Remove My white trainers from your wardrobe');
+  await h.expectNoText('My white trainers');
+  const [ownLike] = await labelsMatching('^I own one like ');
+  if (!ownLike) throw new Error('No "I own one like…" buttons on wardrobe picks');
+  await h.tapLabel(ownLike);
+  await h.expectText('IN YOUR WARDROBE');
+  const [pickRow] = await labelsMatching('^(Top|Bottom|Dress / one-piece|Layer|Shoes|Bag|Accessory): ');
+  if (!pickRow) throw new Error('No wardrobe picks');
+  await h.tapLabel(pickRow);
+  await h.expectLabel('Go back');
+  await h.tapLabel('Go back');
+
+  h.step = 'looks';
+  await h.tapExact('Outfits');
+  await h.expectText('LOOK 1 OF');
+  await h.audit('Stylist: looks');
+  await h.shot('looks');
   await h.tapLabel('Occasion: Work & office');
   await h.pause(300);
   if (await page.evaluate(() => document.body.innerText.includes('Not enough pieces for a full look'))) {
     await h.tapExact('Browse Discover');
-    await h.expectText('Live prices from Flipkart');
+    await h.expectText('Your edit');
     await h.tab('Stylist');
   }
   await h.tapLabel('Occasion: Any occasion');
   await h.tapLabel('Style: Minimalist');
-  await h.expectText('Look 1 of');
+  await h.expectText('LOOK 1 OF');
   await h.tapLabel('Style: Any style');
-  await h.expectText('Look 1 of');
   await h.tapText('Next look');
-  await h.expectText('Look 2 of');
+  await h.expectText('LOOK 2 OF');
   for (let i = 0; i < 8 && !(await page.evaluate(() => document.body.innerText.includes('Back to look 1'))); i++) await h.tapText('Next look');
   await h.tapText('Back to look 1');
-  await h.expectText('Look 1 of');
+  await h.expectText('LOOK 1 OF');
   await h.tapLabel('Share look');
-  const shared = await page.evaluate(() => window.__shared?.text ?? '');
-  if (!shared.includes('My VibeVault look')) throw new Error('Share did not hand the look to the share sheet');
-  const piece = await page.evaluate(() => [...document.querySelectorAll('[aria-label]')].filter((el) => !el.closest('[aria-hidden="true"]')).map((el) => el.getAttribute('aria-label')!).find((l) => /^(Top|Bottom|Dress \/ one-piece|Layer|Shoes|Bag|Accessory): /.test(l)) ?? null);
-  if (!piece) throw new Error('The look has no pieces');
-  await h.tapLabel(piece);
-  await h.expectLabel('Go back');
+  if (!(await page.evaluate(() => window.__shared?.text ?? '')).includes('My VibeVault look')) throw new Error('Share did not hand the look to the share sheet');
+  await h.expectDialog(() => h.tapExact('Save look'), /Look saved/);
+  const [lookPiece] = await labelsMatching('^(Top|Bottom|Dress / one-piece|Layer|Shoes|Bag|Accessory): ');
+  if (!lookPiece) throw new Error('The look has no pieces');
+  await h.tapLabel(lookPiece);
   await h.tapLabel('Go back');
-  await h.tapText('Capsule wardrobe');
-  await h.expectText('for the whole capsule');
-  await h.audit('Stylist: capsule');
-  await h.shot('capsule');
-  const capsulePiece = await page.evaluate(() => [...document.querySelectorAll('[aria-label]')].filter((el) => !el.closest('[aria-hidden="true"]')).map((el) => el.getAttribute('aria-label')!).find((l) => /^(Top|Bottom|Dress \/ one-piece|Layer|Shoes|Bag|Accessory): /.test(l)) ?? null);
-  if (!capsulePiece) throw new Error('The capsule has no pieces');
-  await h.tapLabel(capsulePiece);
-  await h.tapLabel('Go back');
-  await h.tapText('Outfits');
-  await h.expectText('Look 1 of');
-  await h.expectNoText('Men White Oxford Shirt'); // women's sections only
+  await h.tapExact('Whole wardrobe');
+  await h.expectText('Your wardrobe');
 
   // ------------------------------------------------------------------ Item page
   h.step = 'item';
   await h.tab('Discover');
-  await h.tapExact('Best Match'); // available once there's a style profile
-  await expectSelected('Best Match');
+  await h.tapLabel('Sort: Best match'); // available once there's a style profile
+  await expectSelected('Best match');
+  await h.type('Search listings', 'Linen Shirt');
   await h.tapLabelPrefix('Women White Linen Shirt, ');
   await h.expectText('Live price from Flipkart');
-  await h.audit('Item: overview');
+  await h.expectText('WHEN TO BUY');
+  await h.expectText('Wait about two weeks');
+  await h.expectText('72% chance it gets at least 5% cheaper within 14 days');
+  await h.expectText('"wait" was right 72% of 210 times');
+  await h.expectText('Coupons & offers');
+  await h.expectNoText('EXPIRED OFFER');
+  await h.expectNoText('STALE OFFER');
+  await h.audit('Item: price & timing');
   await h.shot('item');
   await h.tapLabel('Remove from wishlist');
   await h.expectLabel('Save to wishlist');
   await h.tapLabel('Save to wishlist');
   await h.expectLabel('Remove from wishlist');
-  await h.tapExact('View on Flipkart');
+  await h.tapText('View on Flipkart');
   await expectOpened('https://dl.flipkart.com/dl/LIN1');
+  await h.tapLabel('Share this listing');
+  if (!(await page.evaluate(() => window.__shared?.text ?? '')).includes('Women White Linen Shirt')) throw new Error('Share did not hand the listing over');
 
-  await h.expectDialog(() => h.tapText('Log Purchase at ₹899'), /Purchase logged/);
+  await h.tapExact('Details');
+  await h.expectText('About this piece');
+  await h.audit('Item: details');
+  await h.expectDialog(() => h.tapText('Log purchase at ₹899'), /Purchase logged/);
   await h.expectText('Undo purchase');
   h.answerNextDialog('dismiss');
   await h.expectDialog(() => h.tapText('Undo purchase'), /Remove purchase\?/);
   await h.expectText('Undo purchase'); // cancelled: still logged
   await h.expectDialog(() => h.tapText('Undo purchase'), /Remove purchase\?/);
-  await h.expectText('Log Purchase at ₹899');
-
-  await h.tapExact('Price');
-  await h.expectText('When to buy');
-  await h.expectText('72% chance it gets at least 5% cheaper within 14 days.');
-  await h.expectText('Typical lowest price over the next 14 days: ₹820');
-  await h.expectText('"wait" was right 72% of 210 times');
-  await h.expectText('Coupons & offers');
-  await h.expectNoText('EXPIRED OFFER');
-  await h.expectNoText('STALE OFFER');
-  await h.audit('Item: price');
-  await h.shot('when-to-buy');
+  await h.expectText('Log purchase at ₹899');
+  await h.tapExact('Price & timing');
   await h.type('Target price in INR', 'abc');
-  await h.expectDialog(() => h.tapExact('Set Alert'), /Invalid price/);
+  await h.expectDialog(() => h.tapExact('Set alert'), /Invalid price/);
   await h.type('Target price in INR', '950', { replace: true });
-  await h.expectDialog(() => h.tapExact('Set Alert'), /must be below the current price/);
+  await h.expectDialog(() => h.tapExact('Set alert'), /must be below the current price/);
   await h.type('Target price in INR', '', { replace: true });
-  await h.expectDialog(() => h.tapExact('Set Alert'), /Price alert set/); // empty = the suggested target
+  await h.expectDialog(() => h.tapLabel('Alert at ₹820'), /Price alert set/); // the expected low
   await h.expectText('Alert set for ₹820 or less');
   await h.tapExact('Remove alert');
   await h.type('Target price in INR', '850');
-  await h.expectDialog(() => h.tapExact('Set Alert'), /Price alert set/);
+  await h.expectDialog(() => h.tapExact('Set alert'), /Price alert set/);
   await h.expectText('Alert set for ₹850 or less');
   await h.tapLabelPrefix('Flipkart: Min. 50% off');
   await expectOpened('https://dl.flipkart.com/dl/offers/western');
@@ -303,24 +347,54 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
     await h.tapLabel(`Search ${label} for this item`);
     await expectOpened(url);
   }
-  await h.tapExact('Style Fit');
-  await h.expectText('Why This Matches Your Vibe');
-  await h.expectText('Your vibe');
-  await h.audit('Item: style fit');
-  await h.tapExact('Overview');
-  await h.expectText('About This Item');
-  await h.tapExact('Style Fit');
+
+  await h.tapExact('Fit & looks');
+  await h.expectText('How it fits you');
+  await h.expectText('YOURS');
+  await h.expectText('Wear it with');
+  await h.audit('Item: style');
+  await h.expectDialog(() => h.tapLabel('Save every piece of this look'), /Look saved/);
+  await h.expectText('Similar for less');
+  const [cheaper] = (await cardLabels()).filter((l) => !l.startsWith('Women White Linen Shirt'));
+  if (!cheaper) throw new Error('No similar-for-less listing');
+  await h.tapLabel(cheaper);
+  await h.expectText('WHEN TO BUY');
+  await h.tapLabel('Go back');
+  await h.expectText('How it fits you');
+  const [lookRow] = await labelsMatching('^(Bottom|Shoes|Layer|Bag|Accessory): ');
+  if (lookRow) {
+    await h.tapLabel(lookRow);
+    await h.tapLabel('Go back');
+  }
+
+  await h.tapExact('Price & timing');
   await scrollToBottom();
   await h.pause(400);
   await h.audit('Item: scrolled'); // the top bar fades in; still one back button
   await h.tapLabel('Go back');
-  await h.expectText('Live prices from Flipkart');
+  await h.tapLabel('Clear search');
+
+  h.step = 'item-timing';
+  await h.type('Search listings', 'Trousers');
+  await h.tapLabelPrefix('Women Straight Leg Beige Trousers, ');
+  await h.expectText('Wait for December');
+  await h.expectText('36 bottoms listings on Flipkart, over 2.1 years of prices.');
+  await h.expectLabel('Alert at ₹1,147'); // the December price as a one-tap alert
+  await h.shot('wait-for-month');
+  await h.tapLabel('Go back');
+  await h.tapLabel('Clear search');
+  await h.type('Search listings', 'Wide Leg');
+  await h.tapLabelPrefix('Women Linen Blend Wide Leg Pants, ');
+  await h.expectText('Sale starts');
+  await h.expectText('Great Winter Sale');
+  await h.tapLabel('Go back');
+  await h.tapLabel('Clear search');
 
   h.step = 'item-seasonal';
   await h.type('Search listings', 'Blazer');
   await h.tapLabelPrefix('Women Camel Wool Blazer, ');
-  await h.tapExact('Price');
   await h.expectText('it was cheapest in October');
+  await h.expectText('Its price through the year');
   await h.shot('seasonal');
   await h.tapLabel('Go back');
   await h.tapLabel('Clear search');
@@ -329,7 +403,7 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.type('Search listings', 'Roadster');
   await h.tapLabelPrefix('Roadster Women Black Slim Fit Jeans, ');
   await h.expectText("Price from Google Shopping's regular update");
-  await h.tapExact('View at Myntra');
+  await h.tapText('View at Myntra');
   await expectOpened('https://www.google.com/shopping/product/4887');
   await h.tapLabel('Go back');
   await h.tapLabel('Clear search');
@@ -338,22 +412,25 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.type('Search listings', 'Trucker');
   await h.tapLabelPrefix("Levi's Vintage Trucker Denim Jacket, ");
   await h.expectText('≈ ₹');
-  await h.expectText('Pre-owned');
-  await h.expectDialog(() => h.tapText('Log Purchase at $42.50'), /Nice find/);
+  await h.tapExact('Details');
+  await h.expectDialog(() => h.tapText('Log purchase at $42.50'), /Nice find/);
   await h.tapLabel('Go back');
   await h.tapLabel('Clear search');
+  await h.expectText('Recently viewed');
+  await h.tapLabel('Clear recently viewed');
+  await h.expectNoText('Recently viewed');
 
   // ------------------------------------------------------------------ Deals
   h.step = 'deals';
   await h.tab('Deals');
-  await h.expectText('Best Deals Right Now');
+  await h.expectText('Best deals right now');
   await h.audit('Deals');
-  await h.tapLabel('Marketplace: eBay');
+  await h.tapLabel('Shop: eBay');
   const ebayDeals = await cardLabels();
   if (ebayDeals.length !== 1 || !ebayDeals[0].startsWith("Levi's")) throw new Error(`eBay filter shows ${ebayDeals.join(' | ')}`);
-  await h.tapLabel('Marketplace: All marketplaces');
+  await h.tapLabel('Shop: All shops');
   await h.tapLabelPrefix('Women White Linen Shirt, ');
-  await h.expectText('Live price from Flipkart');
+  await h.expectText('WHEN TO BUY');
   await h.tapLabel('Go back');
   await h.expectText('When VibeVault said "wait"');
 
@@ -361,6 +438,7 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.expectText('MYNTRA10');
   await h.expectNoText('STALE OFFER');
   await h.expectNoText('EXPIRED OFFER');
+  await h.expectText('Great Winter Sale'); // coming up
   await h.audit('Deals: coupons');
   await h.shot('coupons');
   await h.tapLabelPrefix('Myntra: Flat 10% off');
@@ -371,7 +449,7 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.tapLabelPrefix('Flipkart: Min. 50% off');
   await expectOpened('https://dl.flipkart.com/dl/offers/western');
   await h.tapExact('Top deals');
-  await h.expectText('Best Deals Right Now');
+  await h.expectText('Best deals right now');
 
   await h.tapText('Alerts (1)');
   await h.expectText('Now ₹899 → target ₹850');
@@ -383,16 +461,14 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.expectText('No price alerts yet');
   await h.audit('Deals: no alerts');
   await h.tapExact('Top deals');
-  await h.expectText('Best Deals Right Now');
 
   // ------------------------------------------------------------------ Price-drop alerts
   h.step = 'alerts';
   await h.tab('Discover');
   await h.type('Search listings', 'Turtleneck');
   await h.tapLabelPrefix('Women Black Ribbed Turtleneck, ');
-  await h.tapExact('Price');
   await h.type('Target price in INR', '700');
-  await h.expectDialog(() => h.tapExact('Set Alert'), /Price alert set/);
+  await h.expectDialog(() => h.tapExact('Set alert'), /Price alert set/);
   await h.tapLabel('Go back');
   await h.tapLabel('Clear search');
   // The price drops; the app's next refresh (prices older than 15 minutes) finds it.
@@ -406,7 +482,12 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
     },
     () => undefined,
   );
-  const badge = await page.evaluate(() => [...document.querySelectorAll('a,[role="tab"],[role="button"]')].find((el) => (el as HTMLElement).innerText.includes('Deals') && el.getBoundingClientRect().top > window.innerHeight - 120)?.textContent ?? '');
+  const badge = await page.evaluate(
+    () =>
+      [...document.querySelectorAll('a,[role="tab"],[role="button"]')].find(
+        (el) => (el as HTMLElement).innerText.includes('Deals') && el.getBoundingClientRect().top > window.innerHeight - 120,
+      )?.textContent ?? '',
+  );
   if (!/1/.test(badge)) throw new Error(`The Deals tab should show a badge for the hit alert, shows "${badge}"`);
   await h.tab('Deals');
   await h.tapText('Alerts (1)');
@@ -415,9 +496,8 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.tab('Discover');
   await h.type('Search listings', 'Puff Sleeve');
   await h.tapLabelPrefix('Women Pink Puff Sleeve Blouse, ');
-  await h.tapExact('Price');
   await h.type('Target price in INR', '950');
-  await h.expectDialog(() => h.tapExact('Set Alert'), /Price alert set/);
+  await h.expectDialog(() => h.tapExact('Set alert'), /Price alert set/);
   await h.tapLabel('Go back');
   await h.tapLabel('Clear search');
   backend.setPrice('flipkart:IN:BLS1', 900);
@@ -425,51 +505,51 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.expectDialog(() => h.reload(), /Price drop alert/); // "View" opens the alerts list
   await h.expectText('Target hit — ₹900');
 
-  // ------------------------------------------------------------------ Wishlist
+  // ------------------------------------------------------------------ Wishlist (buying calendar)
   h.step = 'wishlist';
   await h.tab('Profile');
-  await h.tapText('Wishlist (1)');
-  await h.expectText('❤️ Wishlist');
+  const savedCount = await page.evaluate(() => /Wishlist \((\d+)\)/.exec(document.body.innerText)?.[1] ?? '0');
+  await h.tapText(`Wishlist (${savedCount})`);
+  await h.expectText('Your saved pieces as a buying calendar');
+  await h.expectText('Within two weeks');
   await h.audit('Wishlist');
+  await h.shot('wishlist');
   await h.tapLabelPrefix('Women White Linen Shirt, ');
-  await h.expectText('Live price from Flipkart');
+  await h.expectText('WHEN TO BUY');
   await h.tapLabel('Go back');
-  await h.tapLabel('Go back');
-  await h.expectText('Shopping Settings');
-  await h.tapText('Wishlist (1)');
-  await h.tapLabel('Remove Women White Linen Shirt from wishlist');
-  await h.expectText('No saved items yet');
+  for (const label of await labelsMatching('^Remove .+ from wishlist$')) await h.tapLabel(label);
+  await h.expectText('Nothing saved yet');
   await h.audit('Wishlist: empty');
-  await h.tapText('Browse Discover');
-  await h.expectText('Live prices from Flipkart');
+  await h.tapExact('Browse Discover');
+  await h.expectText('Your edit');
 
   // ------------------------------------------------------------------ Quests
   h.step = 'quests';
   await h.tab('Quests');
-  await h.expectText('Style Quests');
+  await h.expectText('Styling and second-hand challenges');
   await h.audit('Quests');
-  for (const filter of ['🆕 New', '⏳ Active', '✅ Done', '📋 All']) {
+  for (const filter of ['New', 'Active', 'Done', 'All']) {
     await h.tapExact(filter);
     await expectSelected(filter);
   }
   await h.tapLabelPrefix('Budget Detective, ');
-  await h.expectText('Quest Details');
+  await h.expectText('Steps');
   await h.audit('Quest detail');
-  await h.tapText('Open Deal Detector');
-  await h.expectText('Price Alerts');
+  await h.tapText('Open my price alerts');
+  await h.expectText('Price alerts');
   await h.tab('Quests');
   await h.expectText('Budget Detective');
-  await h.expectDialog(() => h.tapText('Start Quest'), /Quest started/);
+  await h.expectDialog(() => h.tapText('Start quest'), /Quest started/);
   for (let stepNo = 1; stepNo <= 4; stepNo++) await h.tapText(`Done: step ${stepNo} of 5`);
   await h.expectDialog(() => h.tapText('Done: step 5 of 5'), /Quest complete!.*Deal Detective/);
-  await h.expectText('Quest Completed!');
+  await h.expectText('Quest completed');
   await h.tapLabel('Go back');
-  await h.tapExact('✅ Done');
+  await h.tapExact('Done');
   await h.expectText('Budget Detective');
-  await h.tapExact('📋 All');
+  await h.tapExact('All');
   await h.tapLabelPrefix('Build Your Vibe Board, ');
   await h.tapText('Open the Stylist');
-  await h.expectText('Your Stylist');
+  await h.expectText('Your wardrobe');
   await h.tab('Quests');
   await h.tapLabel('Go back');
   await h.tapLabelPrefix('Hidden Gems Explorer, ');
@@ -481,9 +561,9 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   h.step = 'profile';
   await h.tab('Profile');
   // The Profile tab is still showing the (now empty) Wishlist from earlier.
-  await h.expectText('No saved items yet');
+  await h.expectText('Nothing saved yet');
   await h.tapLabel('Go back');
-  await h.expectText('Shopping Settings');
+  await h.expectText('Currency for totals & budget');
   await h.audit('Profile');
   await h.shot('profile');
   await h.tapLabelPrefix('Display name ');
@@ -550,10 +630,10 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
   await h.expectDialog(() => h.tapText('Reset all data'), /Reset all data\?/);
   await h.pause(300);
   await h.expectNoText('Asha Test');
-  await h.tab('My Vibe');
+  await h.tab('Style');
   await h.expectText('Where do you shop?');
   await h.tab('Stylist');
-  await h.tapText('Take the Style Profiler so looks follow your style');
+  await h.tapText('Take the style quiz');
   await h.expectText('Where do you shop?');
 
   // ------------------------------------------------------------------ Offline
@@ -595,9 +675,10 @@ export async function runFlows(h: Harness, base: string, backend: FakeBackend) {
     await h.audit(`Item (${name})`);
     await h.shot(`item-${name.replace(' ', '-')}`);
     await h.tapLabel('Go back');
-    for (const tab of ['My Vibe', 'Stylist', 'Deals', 'Quests', 'Profile']) {
+    for (const tab of ['Style', 'Stylist', 'Deals', 'Quests', 'Profile']) {
       await h.tab(tab);
       await h.audit(`${tab} (${name})`);
+      await h.shot(`${tab.toLowerCase()}-${name.replace(' ', '-')}`);
     }
   }
   await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });

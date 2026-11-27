@@ -2,7 +2,8 @@
 // publisher has joined. Docs (checked 2026-11-26):
 //   Offers:     POST https://api.awin.com/publisher/{publisherId}/promotions with a JSON body
 //               {filters: {membership, regionCodes, status, type, …}, pagination: {page, pageSize}}.
-//               status "active" = "Offers which are currently valid"; pageSize 10–200 (default 200);
+//               status "active" = "Offers which are currently valid"; "upcoming" = "Offers which are not yet
+//               valid (their startDate is in the future)"; pageSize 10–200 (default 200);
 //               startDate/endDate are "YYYY-MM-DDT00:00:00.000" and "Time is in UTC"; voucher.code is
 //               null when the publisher hasn't joined the advertiser.
 //               https://help.awin.com/apidocs/promotions (OpenAPI: https://help.awin.com/apidocs/promotions.md)
@@ -23,6 +24,7 @@
 import { requestJson } from '../http.ts';
 import { cleanText, toHttps } from '../normalize.ts';
 import { parseMarketList } from '../providers/ebay.ts';
+import { UPCOMING_OFFER_MS } from '../types.ts';
 import type { EnvGetter, FetchLike, Market, NormalizedOffer, OfferProvider, OfferSourceDefinition } from '../types.ts';
 
 export const AWIN_API_BASE = 'https://api.awin.com';
@@ -174,7 +176,8 @@ export function parseAwinOffer(offer: AwinOffer, market: Market, now: Date, prog
   const startsAt = awinTimeToIso(offer.startDate);
   const endsAt = awinTimeToIso(offer.endDate);
   if (startsAt === undefined || endsAt === undefined) return null;
-  if (startsAt !== null && Date.parse(startsAt) > now.getTime()) return null;
+  // Announced offers are kept (shown as upcoming sales) when they start within 90 days.
+  if (startsAt !== null && Date.parse(startsAt) > now.getTime() + UPCOMING_OFFER_MS) return null;
   if (endsAt !== null && Date.parse(endsAt) <= now.getTime()) return null;
 
   let code: string | null = null;
@@ -220,7 +223,7 @@ export function createAwinProvider(config: AwinConfig, fetch: FetchLike, now: ()
   const publisher = encodeURIComponent(config.publisherId);
   const sweeps = new Map<string, { startedAt: number; result: Promise<Sweep> }>();
 
-  async function activeOffers(regionCodes: string[]): Promise<AwinOffer[]> {
+  async function offersWithStatus(regionCodes: string[], status: 'active' | 'upcoming'): Promise<AwinOffer[]> {
     const offers: AwinOffer[] = [];
     for (let page = 1; page <= AWIN_MAX_PAGES; page++) {
       const body = await requestJson<AwinOffersPage>(
@@ -229,7 +232,7 @@ export function createAwinProvider(config: AwinConfig, fetch: FetchLike, now: ()
           method: 'POST',
           headers: { ...auth, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            filters: { membership: 'joined', regionCodes, status: 'active', type: 'all' },
+            filters: { membership: 'joined', regionCodes, status, type: 'all' },
             pagination: { page, pageSize: AWIN_PAGE_SIZE },
           }),
         },
@@ -260,14 +263,15 @@ export function createAwinProvider(config: AwinConfig, fetch: FetchLike, now: ()
     return byId;
   }
 
-  /** One paginated read of the active offers for `markets`, shared by concurrent and nearby calls. */
+  /** Paginated reads of the active and upcoming offers for `markets`, shared by concurrent and nearby calls. */
   function sweep(markets: Market[]): Promise<Sweep> {
     const key = markets.join(',');
     const startedAt = now().getTime();
     const cached = sweeps.get(key);
     if (cached && startedAt - cached.startedAt < AWIN_SWEEP_TTL_MS) return cached.result;
     const result = (async () => {
-      const offers = await activeOffers([...new Set(markets.flatMap(awinRegionCodesFor))]);
+      const regionCodes = [...new Set(markets.flatMap(awinRegionCodesFor))];
+      const offers = [...(await offersWithStatus(regionCodes, 'active')), ...(await offersWithStatus(regionCodes, 'upcoming'))];
       return { offers, programmes: offers.length ? await joinedProgrammes() : new Map<string, AwinProgramme>() };
     })();
     sweeps.set(key, { startedAt, result });

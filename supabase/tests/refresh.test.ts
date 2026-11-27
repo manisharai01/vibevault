@@ -114,7 +114,8 @@ describe('refresh', () => {
         })),
       ),
     ]);
-    await db.exec(`update listings set last_checked_at = now() - interval '2 days'`);
+    // Two days before the refresh's clock (NOW), not the real clock, so the test doesn't depend on today's date.
+    await db.exec(`update listings set last_checked_at = '2026-11-24T10:00:00Z'`);
 
     const provider = fakeEbay(
       fakes,

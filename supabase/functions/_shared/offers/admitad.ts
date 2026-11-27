@@ -22,6 +22,7 @@ import { base64Encode } from '../crypto.ts';
 import { HttpError, requestJson } from '../http.ts';
 import { cleanText, toHttps } from '../normalize.ts';
 import { parseMarketList } from '../providers/ebay.ts';
+import { UPCOMING_OFFER_MS } from '../types.ts';
 import type { EnvGetter, FetchLike, Market, NormalizedOffer, OfferProvider, OfferSourceDefinition } from '../types.ts';
 
 export const ADMITAD_API_BASE = 'https://api.admitad.com';
@@ -170,7 +171,8 @@ export function parseAdmitadCoupon(coupon: AdmitadCoupon, market: Market, now: D
   const startsAt = admitadTimeToIso(coupon.date_start);
   const endsAt = admitadTimeToIso(coupon.date_end);
   if (startsAt === undefined || endsAt === undefined) return null;
-  if (startsAt !== null && Date.parse(startsAt) > now.getTime()) return null;
+  // Coupons announced ahead of their start are kept (shown as upcoming sales), up to 90 days out.
+  if (startsAt !== null && Date.parse(startsAt) > now.getTime() + UPCOMING_OFFER_MS) return null;
   if (endsAt !== null && Date.parse(endsAt) <= now.getTime()) return null;
 
   // An "action" is a deal that applies without a code; a promo code coupon without its code is useless.

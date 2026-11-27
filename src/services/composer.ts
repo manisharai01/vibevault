@@ -1,20 +1,28 @@
 // ============================================================
-// VibeVault – Stylist: outfits and a capsule wardrobe
+// VibeVault – Stylist: outfits, "complete the look" and a whole
+// wardrobe plan
 //
 // Deterministic: candidates are the user's best matches (already
 // scored by the style engine); outfits are searched exhaustively
 // over the top candidates per slot and scored for colour harmony,
 // one print at most, matching formality, a shared style, wishlist
-// pieces and budget. "Another look" walks down the ranking.
+// pieces and budget. "Next look" walks down the ranking.
+//
+// The wardrobe plan sizes a complete wardrobe from the user's
+// sections, occasions and personality traits, counts what they
+// already own, and fills the gaps with live listings chosen to mix
+// into as many outfits as possible within one palette.
 // ============================================================
 
 import { COLOR_FAMILY_LABELS, matchesShopFor, OCCASION_LABELS } from '../constants/marketplaces';
-import { ColorFamily, FashionItem, ItemCategory, Occasion, StyleArchetype, UserProfile } from '../types';
+import { ColorFamily, FashionItem, ItemCategory, Occasion, OwnedPiece, StyleArchetype, TraitScores, UserProfile, WardrobeSlot } from '../types';
 import { formatMoneyWhole, FxRates } from '../utils/format';
 import { priceIn, totalIn, type MoneyTotal } from './catalog';
 import { colorFamilies, formalityOf, isNeutral, isPatterned, occasionsOf } from './itemTraits';
 
-export type SlotKey = 'top' | 'bottom' | 'dress' | 'layer' | 'shoes' | 'bag' | 'accessory';
+export type SlotKey = WardrobeSlot;
+
+export const SLOTS: SlotKey[] = ['top', 'bottom', 'dress', 'layer', 'shoes', 'bag', 'accessory'];
 
 export const SLOT_CATEGORY: Record<SlotKey, ItemCategory> = {
   top: 'Tops',
@@ -35,6 +43,21 @@ export const SLOT_LABELS: Record<SlotKey, string> = {
   bag: 'Bag',
   accessory: 'Accessory',
 };
+
+/** Plural section titles for the wardrobe. */
+export const SLOT_SECTION: Record<SlotKey, string> = {
+  top: 'Tops',
+  bottom: 'Bottoms',
+  dress: 'Dresses & one-pieces',
+  layer: 'Layers',
+  shoes: 'Shoes',
+  bag: 'Bags',
+  accessory: 'Accessories',
+};
+
+export function slotForCategory(category: ItemCategory): SlotKey {
+  return (Object.keys(SLOT_CATEGORY) as SlotKey[]).find((slot) => SLOT_CATEGORY[slot] === category) ?? 'accessory';
+}
 
 export interface OutfitPiece {
   slot: SlotKey;
@@ -74,18 +97,22 @@ interface Candidate {
   fromWishlist: boolean;
 }
 
+function toCandidate(item: FashionItem, options: Pick<StylistOptions, 'wishlist'>): Candidate {
+  return {
+    item,
+    families: colorFamilies(item),
+    formality: formalityOf(item),
+    patterned: isPatterned(item),
+    fromWishlist: options.wishlist.has(item.id),
+  };
+}
+
 function candidatesFor(items: FashionItem[], slot: SlotKey, options: StylistOptions, limit: number): Candidate[] {
   return items
     .filter((i) => i.available && i.category === SLOT_CATEGORY[slot])
     .filter((i) => !options.style || i.styleArchetypes.includes(options.style))
     .filter((i) => !options.occasion || occasionsOf(i).includes(options.occasion))
-    .map((item) => ({
-      item,
-      families: colorFamilies(item),
-      formality: formalityOf(item),
-      patterned: isPatterned(item),
-      fromWishlist: options.wishlist.has(item.id),
-    }))
+    .map((item) => toCandidate(item, options))
     // Saved pieces first, then the best matches.
     .sort((a, b) => Number(b.fromWishlist) - Number(a.fromWishlist) || b.item.matchScore - a.item.matchScore || a.item.id.localeCompare(b.item.id))
     .slice(0, limit);
@@ -172,29 +199,45 @@ function toOutfit(slots: [SlotKey, Candidate][], scored: Scored, profile: Stylis
 const ids = (o: Outfit) => new Set(o.pieces.map((p) => p.item.id));
 
 /**
- * The best outfits from `items` (scored listings), best first, each differing from the ones
- * before it by at least two pieces. Base is top + bottom or a one-piece; then shoes, and a
- * layer, bag or accessory when they make the look better.
+ * Every look over the top candidates, best first. With `fixed`, that piece is in every look (in
+ * its slot), which is how "complete the look" works.
  */
-export function buildOutfits(items: FashionItem[], profile: StylistProfile, options: StylistOptions, count = 5): Outfit[] {
-  const pool = items.filter((i) => matchesShopFor(i.department, profile.shopFor));
-  const tops = candidatesFor(pool, 'top', options, PER_SLOT);
-  const bottoms = candidatesFor(pool, 'bottom', options, PER_SLOT);
-  const dresses = candidatesFor(pool, 'dress', options, PER_SLOT);
-  const shoes = candidatesFor(pool, 'shoes', { ...options, occasion: null }, PER_SLOT);
-  const layers = options.occasion === 'active' ? [] : candidatesFor(pool, 'layer', { ...options, occasion: null }, OPTIONAL_PER_SLOT);
+function searchLooks(
+  items: FashionItem[],
+  profile: StylistProfile,
+  options: StylistOptions,
+  count: number,
+  fixed?: { slot: SlotKey; candidate: Candidate },
+): Outfit[] {
+  const pool = items.filter((i) => matchesShopFor(i.department, profile.shopFor) && i.id !== fixed?.candidate.item.id);
+  const pick = (slot: SlotKey, opts: StylistOptions, limit: number) =>
+    fixed?.slot === slot ? [fixed.candidate] : candidatesFor(pool, slot, opts, limit);
+  const free = { ...options, occasion: null };
+  const tops = pick('top', options, PER_SLOT);
+  const bottoms = pick('bottom', options, PER_SLOT);
+  const dresses = pick('dress', options, PER_SLOT);
+  const shoes = pick('shoes', free, PER_SLOT);
+  const layers = options.occasion === 'active' && fixed?.slot !== 'layer' ? [] : pick('layer', free, OPTIONAL_PER_SLOT);
   const extras = [
-    ...candidatesFor(pool, 'bag', { ...options, occasion: null }, OPTIONAL_PER_SLOT).map((c) => ['bag', c] as [SlotKey, Candidate]),
-    ...candidatesFor(pool, 'accessory', { ...options, occasion: null }, OPTIONAL_PER_SLOT).map((c) => ['accessory', c] as [SlotKey, Candidate]),
+    ...pick('bag', free, OPTIONAL_PER_SLOT).map((c) => ['bag', c] as [SlotKey, Candidate]),
+    ...pick('accessory', free, OPTIONAL_PER_SLOT).map((c) => ['accessory', c] as [SlotKey, Candidate]),
   ];
 
-  const bases: [SlotKey, Candidate][][] = [
-    ...tops.flatMap((t) => bottoms.map((b): [SlotKey, Candidate][] => [['top', t], ['bottom', b]])),
-    ...dresses.map((d): [SlotKey, Candidate][] => [['dress', d]]),
-  ];
+  // A fixed top/bottom pairs only with the other half; a fixed dress is its own base.
+  const bases: [SlotKey, Candidate][][] =
+    fixed?.slot === 'dress'
+      ? dresses.map((d): [SlotKey, Candidate][] => [['dress', d]])
+      : fixed?.slot === 'top' || fixed?.slot === 'bottom'
+        ? tops.flatMap((t) => bottoms.map((b): [SlotKey, Candidate][] => [['top', t], ['bottom', b]]))
+        : [
+            ...tops.flatMap((t) => bottoms.map((b): [SlotKey, Candidate][] => [['top', t], ['bottom', b]])),
+            ...dresses.map((d): [SlotKey, Candidate][] => [['dress', d]]),
+          ];
   const shoeOptions: ([SlotKey, Candidate] | null)[] = shoes.length ? shoes.map((s) => ['shoes', s] as [SlotKey, Candidate]) : [null];
-  const layerOptions: ([SlotKey, Candidate] | null)[] = [null, ...layers.map((l) => ['layer', l] as [SlotKey, Candidate])];
-  const extraOptions: ([SlotKey, Candidate] | null)[] = [null, ...extras];
+  const layerOptions: ([SlotKey, Candidate] | null)[] =
+    fixed?.slot === 'layer' ? layers.map((l) => ['layer', l] as [SlotKey, Candidate]) : [null, ...layers.map((l) => ['layer', l] as [SlotKey, Candidate])];
+  const extraOptions: ([SlotKey, Candidate] | null)[] =
+    fixed?.slot === 'bag' || fixed?.slot === 'accessory' ? extras.filter(([slot]) => slot === fixed.slot) : [null, ...extras];
 
   const all: { slots: [SlotKey, Candidate][]; scored: Scored; key: string }[] = [];
   for (const base of bases) {
@@ -223,112 +266,259 @@ export function buildOutfits(items: FashionItem[], profile: StylistProfile, opti
   return chosen;
 }
 
-// ---- Capsule wardrobe ----------------------------------------------------------------
-
-export interface Capsule {
-  pieces: OutfitPiece[];
-  /** Outfits (top + bottom + shoes, or one-piece + shoes) that work within the capsule. */
-  outfitCount: number;
-  examples: Outfit[];
-  palette: { neutrals: ColorFamily[]; accents: ColorFamily[] };
-  total: MoneyTotal;
+/**
+ * The best outfits from `items` (scored listings), best first, each differing from the ones
+ * before it by at least two pieces. Base is top + bottom or a one-piece; then shoes, and a
+ * layer, bag or accessory when they make the look better.
+ */
+export function buildOutfits(items: FashionItem[], profile: StylistProfile, options: StylistOptions, count = 5): Outfit[] {
+  return searchLooks(items, profile, options, count);
 }
 
-/** Pieces per slot in the capsule (a standard ~14-piece capsule; no dress slot for menswear-only). */
-export function capsulePlan(shopFor: UserProfile['shopFor']): Partial<Record<SlotKey, number>> {
-  return shopFor === 'men'
-    ? { top: 5, bottom: 3, layer: 2, shoes: 2, bag: 1, accessory: 1 }
-    : { top: 4, bottom: 3, dress: 2, layer: 2, shoes: 2, bag: 1, accessory: 1 };
+/** Outfits built around one listing ("complete the look"), best first. */
+export function completeTheLook(anchor: FashionItem, items: FashionItem[], profile: StylistProfile, options: StylistOptions, count = 1): Outfit[] {
+  if (!anchor.available) return [];
+  const slot = slotForCategory(anchor.category);
+  return searchLooks(items, profile, { ...options, occasion: null, style: null }, count, { slot, candidate: toCandidate(anchor, options) }).filter(
+    (o) => o.pieces.length >= 2,
+  );
+}
+
+// ---- Whole wardrobe ----------------------------------------------------------------
+
+export interface WardrobePlan {
+  targets: Record<SlotKey, number>;
+  /** Why the plan looks the way it does, one line per adjustment. */
+  reasons: string[];
+}
+
+const CAPS: Record<SlotKey, number> = { top: 10, bottom: 6, dress: 5, layer: 4, shoes: 5, bag: 3, accessory: 5 };
+
+/**
+ * How many pieces of each kind a complete wardrobe needs, from the user's sections, the
+ * occasions they dress for and their personality traits.
+ */
+export function wardrobePlan(profile: Pick<UserProfile, 'shopFor' | 'occasions'> & { traits?: TraitScores }): WardrobePlan {
+  const menOnly = profile.shopFor === 'men';
+  const targets: Record<SlotKey, number> = menOnly
+    ? { top: 7, bottom: 4, dress: 0, layer: 2, shoes: 3, bag: 1, accessory: 3 }
+    : { top: 6, bottom: 4, dress: profile.shopFor === 'women' ? 3 : 2, layer: 2, shoes: 3, bag: 2, accessory: 3 };
+  const reasons: string[] = [];
+  const add = (changes: Partial<Record<SlotKey, number>>, reason: string) => {
+    let applied = false;
+    for (const [slot, n] of Object.entries(changes) as [SlotKey, number][]) {
+      if (slot === 'dress' && menOnly) continue;
+      const next = Math.min(CAPS[slot], targets[slot] + n);
+      if (next !== targets[slot]) applied = true;
+      targets[slot] = next;
+    }
+    if (applied) reasons.push(reason);
+  };
+  const statement = (n: number): Partial<Record<SlotKey, number>> => (menOnly ? { top: n } : { dress: n });
+
+  const occasions = new Set(profile.occasions);
+  if (occasions.has('work')) add({ top: 2, bottom: 1 }, 'Work & office: two more shirts or blouses and smart trousers.');
+  if (occasions.has('everyday')) add({ top: 1 }, 'Everyday: an extra easy top for rotation.');
+  if (occasions.has('evening')) add({ ...statement(1), shoes: 1 }, 'Nights out: a going-out piece and a pair of shoes for it.');
+  if (occasions.has('festive')) add({ ...statement(1), accessory: 1 }, 'Festive & weddings: an occasion outfit and jewellery.');
+  if (occasions.has('active')) add({ bottom: 1, shoes: 1 }, 'Gym & sport: activewear bottoms and trainers.');
+  if (occasions.has('outdoors')) add({ layer: 1, shoes: 1 }, 'Travel & outdoors: a weatherproof layer and walking shoes.');
+
+  const t = profile.traits ?? {};
+  const strong = (x: number | undefined) => (x ?? 0) >= 0.5;
+  if (strong(t.polish)) add({ layer: 1 }, 'You come across as polished: a second tailored layer.');
+  if (strong(t.comfort)) add({ bottom: 1 }, 'Comfort matters to you: an extra easy-fit bottom.');
+  if (strong(t.expressive)) add({ accessory: 1 }, 'You like to stand out: a statement accessory.');
+  if (strong(t.novelty)) add({ top: 1 }, 'Trend-curious: one trend piece to rotate in.');
+  if (strong(t.edge)) add({ layer: 1 }, 'An edgy streak: a stand-out jacket.');
+  if (strong(t.warmth)) add(statement(1), 'Warm and approachable: a soft, easy piece.');
+
+  return { targets, reasons };
+}
+
+export interface WardrobeSlotPlan {
+  slot: SlotKey;
+  target: number;
+  owned: OwnedPiece[];
+  picks: OutfitPiece[];
+}
+
+export interface WardrobeLook {
+  pieces: { slot: SlotKey; title: string; item: FashionItem | null; owned: boolean }[];
+}
+
+export interface Wardrobe {
+  plan: WardrobePlan;
+  slots: WardrobeSlotPlan[];
+  palette: { neutrals: ColorFamily[]; accents: ColorFamily[] };
+  /** Target pieces in total. */
+  pieces: number;
+  ownedCount: number;
+  picks: OutfitPiece[];
+  /** Outfits (top + bottom or one-piece, with shoes) the planned wardrobe mixes into. */
+  outfitCount: number;
+  /** Cost of the suggested pieces (not what's already owned). */
+  total: MoneyTotal;
+  examples: WardrobeLook[];
+}
+
+interface Entry {
+  key: string;
+  slot: SlotKey;
+  families: ColorFamily[];
+  formality: number;
+  patterned: boolean;
+  match: number;
+  item: FashionItem | null;
+  owned: OwnedPiece | null;
+  fromWishlist: boolean;
 }
 
 /** A look works when colours, prints and formality don't clash. */
-function compatible(look: Candidate[]): boolean {
+function compatible(look: Entry[]): boolean {
   const accents = new Set(look.flatMap((p) => p.families.filter((f) => !isNeutral(f))));
   const levels = look.map((p) => p.formality);
   return accents.size <= 2 && look.filter((p) => p.patterned).length <= 1 && Math.max(...levels) - Math.min(...levels) <= 1;
 }
 
 /** Working looks (base + shoes) in a selection; with `only`, just the looks that include it. */
-function looksIn(selected: Map<SlotKey, Candidate[]>, only?: Candidate): [SlotKey, Candidate][][] {
-  const looks: [SlotKey, Candidate][][] = [];
+function looksIn(selected: Map<SlotKey, Entry[]>, only?: Entry): Entry[][] {
+  const looks: Entry[][] = [];
   const shoes = selected.get('shoes') ?? [];
-  const shoeChoices: ([SlotKey, Candidate] | null)[] = shoes.length ? shoes.map((c): [SlotKey, Candidate] => ['shoes', c]) : [null];
-  const bases: [SlotKey, Candidate][][] = [
-    ...(selected.get('top') ?? []).flatMap((t) => (selected.get('bottom') ?? []).map((b): [SlotKey, Candidate][] => [['top', t], ['bottom', b]])),
-    ...(selected.get('dress') ?? []).map((d): [SlotKey, Candidate][] => [['dress', d]]),
+  const shoeChoices: (Entry | null)[] = shoes.length ? shoes : [null];
+  const bases: Entry[][] = [
+    ...(selected.get('top') ?? []).flatMap((t) => (selected.get('bottom') ?? []).map((b) => [t, b])),
+    ...(selected.get('dress') ?? []).map((d) => [d]),
   ];
   for (const base of bases) {
     for (const shoe of shoeChoices) {
       const look = shoe ? [...base, shoe] : base;
-      if (only && !look.some(([, c]) => c === only)) continue;
-      if (compatible(look.map(([, c]) => c))) looks.push(look);
+      if (only && !look.includes(only)) continue;
+      if (compatible(look)) looks.push(look);
     }
   }
   return looks;
 }
 
+/** How a piece counts in outfit maths: owned pieces use what we know about them. */
+function ownedEntry(piece: OwnedPiece, itemsById: Map<string, FashionItem>): Entry {
+  const item = piece.itemId ? itemsById.get(piece.itemId) ?? null : null;
+  return {
+    key: piece.id,
+    slot: piece.slot,
+    families: piece.colors,
+    formality: item ? formalityOf(item) : 2,
+    patterned: item ? isPatterned(item) : false,
+    match: 100,
+    item,
+    owned: piece,
+    fromWishlist: false,
+  };
+}
+
 /**
- * A capsule wardrobe built around the user's palette: pieces are added one at a time, each time
- * picking the candidate that adds the most (its match plus how many new working outfits it makes).
+ * A complete wardrobe: the plan's pieces per slot, counting what the user owns, with the gaps
+ * filled one piece at a time by the live listing that adds the most (its match plus how many
+ * new working outfits it makes with everything chosen or owned so far), within one palette.
  */
-export function buildCapsule(items: FashionItem[], profile: StylistProfile & Pick<UserProfile, 'likedColors'>, options: StylistOptions): Capsule | null {
+export function buildWardrobe(
+  items: FashionItem[],
+  profile: StylistProfile & Pick<UserProfile, 'likedColors'> & { traits?: TraitScores },
+  options: StylistOptions & { owned: OwnedPiece[] },
+): Wardrobe | null {
   const pool = items.filter((i) => i.available && matchesShopFor(i.department, profile.shopFor));
-  if (pool.length === 0) return null;
-  const plan = capsulePlan(profile.shopFor);
+  const plan = wardrobePlan(profile);
+  if (pool.length === 0 && options.owned.length === 0) return null;
 
   // Palette: the user's loved neutrals (or the commonest among their best matches) plus up to two accents.
-  const top = [...pool].sort((a, b) => b.matchScore - a.matchScore).slice(0, 40);
-  const tally = (pick: (f: ColorFamily) => boolean) => {
+  const best = [...pool].sort((a, b) => b.matchScore - a.matchScore).slice(0, 40);
+  const tally = (keep: (f: ColorFamily) => boolean) => {
     const counts = new Map<ColorFamily, number>();
-    for (const i of top) for (const f of colorFamilies(i).filter(pick)) counts.set(f, (counts.get(f) ?? 0) + 1);
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([f]) => f);
+    for (const i of best) for (const f of colorFamilies(i).filter(keep)) counts.set(f, (counts.get(f) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([f]) => f);
   };
   const lovedNeutrals = profile.likedColors.filter(isNeutral);
   const lovedAccents = profile.likedColors.filter((f) => !isNeutral(f));
   const neutrals = (lovedNeutrals.length ? lovedNeutrals : tally(isNeutral)).slice(0, 3);
   const accents = (lovedAccents.length ? lovedAccents : tally((f) => !isNeutral(f))).slice(0, 2);
   const palette = new Set([...neutrals, ...accents]);
-  const inPalette = (c: Candidate) => c.families.length === 0 || c.families.every((f) => palette.has(f));
 
-  const selected = new Map<SlotKey, Candidate[]>();
-  const slots = Object.keys(plan) as SlotKey[];
-  const candidates = new Map(slots.map((slot) => [slot, candidatesFor(pool, slot, options, 12).filter(inPalette)]));
-  const target = slots.reduce((sum, slot) => sum + (plan[slot] ?? 0), 0);
-  for (let step = 0; step < target; step++) {
-    let best: { slot: SlotKey; candidate: Candidate; gain: number } | null = null;
-    for (const slot of slots) {
-      const have = selected.get(slot) ?? [];
-      if (have.length >= (plan[slot] ?? 0)) continue;
-      for (const candidate of candidates.get(slot) ?? []) {
-        if (have.includes(candidate)) continue;
-        const trial = new Map(selected);
-        trial.set(slot, [...have, candidate]);
-        // New working outfits this piece would create with what's already in the capsule.
-        const added = looksIn(trial, candidate).length;
-        const gain = candidate.item.matchScore / 100 + added * 0.25 + (candidate.fromWishlist ? 0.3 : 0);
-        if (!best || gain > best.gain || (gain === best.gain && candidate.item.id < best.candidate.item.id)) {
-          best = { slot, candidate, gain };
+  const itemsById = new Map(items.map((i) => [i.id, i]));
+  const ownedItemIds = new Set(options.owned.map((o) => o.itemId).filter((x): x is string => !!x));
+  const selected = new Map<SlotKey, Entry[]>(SLOTS.map((slot) => [slot, [] as Entry[]]));
+  for (const piece of options.owned) selected.get(piece.slot)!.push(ownedEntry(piece, itemsById));
+
+  const candidates = new Map<SlotKey, Entry[]>(
+    SLOTS.map((slot) => [
+      slot,
+      candidatesFor(pool, slot, { ...options, occasion: null, style: null }, 14)
+        .filter((c) => !ownedItemIds.has(c.item.id))
+        .filter((c) => c.families.length === 0 || c.families.every((f) => palette.has(f)))
+        .map((c) => ({
+          key: c.item.id,
+          slot,
+          families: c.families,
+          formality: c.formality,
+          patterned: c.patterned,
+          match: c.item.matchScore,
+          item: c.item,
+          owned: null,
+          fromWishlist: c.fromWishlist,
+        })),
+    ]),
+  );
+
+  const outfitSlots = new Set<SlotKey>(['top', 'bottom', 'dress', 'shoes']);
+  const remaining = (slot: SlotKey) => plan.targets[slot] - selected.get(slot)!.length;
+  const toFill = SLOTS.reduce((sum, slot) => sum + Math.max(0, remaining(slot)), 0);
+  for (let step = 0; step < toFill; step++) {
+    let pick: { slot: SlotKey; entry: Entry; gain: number } | null = null;
+    for (const slot of SLOTS) {
+      if (remaining(slot) <= 0) continue;
+      const have = selected.get(slot)!;
+      for (const entry of candidates.get(slot)!) {
+        if (have.includes(entry)) continue;
+        let added = 0;
+        if (outfitSlots.has(slot)) {
+          const trial = new Map(selected);
+          trial.set(slot, [...have, entry]);
+          added = looksIn(trial, entry).length;
         }
+        const gain = entry.match / 100 + Math.min(added, 12) * 0.25 + (entry.fromWishlist ? 0.3 : 0);
+        if (!pick || gain > pick.gain || (gain === pick.gain && entry.key < pick.entry.key)) pick = { slot, entry, gain };
       }
     }
-    if (!best) break;
-    selected.set(best.slot, [...(selected.get(best.slot) ?? []), best.candidate]);
+    if (!pick) break;
+    selected.get(pick.slot)!.push(pick.entry);
   }
 
-  const pieces: OutfitPiece[] = slots.flatMap((slot) =>
-    (selected.get(slot) ?? []).map((c) => ({ slot, item: c.item, fromWishlist: c.fromWishlist })),
-  );
-  if (pieces.length === 0) return null;
+  const slots: WardrobeSlotPlan[] = SLOTS.filter((slot) => plan.targets[slot] > 0 || selected.get(slot)!.length > 0).map((slot) => ({
+    slot,
+    target: plan.targets[slot],
+    owned: selected.get(slot)!.filter((e) => e.owned).map((e) => e.owned!),
+    picks: selected
+      .get(slot)!
+      .filter((e) => e.item && !e.owned)
+      .map((e) => ({ slot, item: e.item!, fromWishlist: e.fromWishlist })),
+  }));
+  const picks = slots.flatMap((s) => s.picks);
   const looks = looksIn(selected);
-  const examples = looks
-    .map((look) => toOutfit(look, scoreLook(look.map(([, c]) => c), profile, options), profile, options))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 6);
+  const examples: WardrobeLook[] = [...looks]
+    .sort((a, b) => b.reduce((s, e) => s + e.match, 0) / b.length - a.reduce((s, e) => s + e.match, 0) / a.length || a.map((e) => e.key).join().localeCompare(b.map((e) => e.key).join()))
+    .slice(0, 4)
+    .map((look) => ({
+      pieces: look.map((e) => ({ slot: e.slot, title: e.owned ? e.owned.title : e.item!.title, item: e.item, owned: !!e.owned })),
+    }));
+
   return {
-    pieces,
-    outfitCount: looks.length,
-    examples,
+    plan,
+    slots,
     palette: { neutrals, accents },
-    total: totalIn(pieces.map((p) => p.item), profile.currency, options.rates),
+    pieces: SLOTS.reduce((sum, slot) => sum + plan.targets[slot], 0),
+    ownedCount: options.owned.length,
+    picks,
+    outfitCount: looks.length,
+    total: totalIn(picks.map((p) => p.item), profile.currency, options.rates),
+    examples,
   };
 }

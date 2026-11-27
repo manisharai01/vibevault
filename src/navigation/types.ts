@@ -4,9 +4,9 @@
 
 import type { NavigatorScreenParams } from '@react-navigation/native';
 
-/** `tab` opens a section other than Overview (e.g. Price, from a price alert). */
+/** `tab` opens a section other than the default (Price & timing). */
 export type ItemDetailParams = { itemId: string; tab?: ItemDetailTab };
-export type ItemDetailTab = 'overview' | 'price' | 'style';
+export type ItemDetailTab = 'price' | 'style' | 'details';
 
 export type DiscoverStackParamList = {
   DiscoverFeed: undefined;

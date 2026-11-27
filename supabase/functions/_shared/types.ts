@@ -156,6 +156,12 @@ export interface HistoryDefinition {
 
 // ---- Coupons and offers from official merchant / affiliate-network feeds ----
 
+/**
+ * Offers announced up to this far ahead are kept: they're shown as "sale starts on …" until
+ * they start (see the upcoming_offers view), then as coupons.
+ */
+export const UPCOMING_OFFER_MS = 90 * 86_400_000;
+
 export interface NormalizedOffer {
   /** Feed it came from, e.g. "flipkart", "admitad", "cuelinks". */
   network: string;

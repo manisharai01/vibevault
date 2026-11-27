@@ -17,6 +17,7 @@ import {
   PredictionHorizon,
   PriceStats,
   PricePoint,
+  SeasonProfile,
   StyleArchetype,
   Verdict,
 } from '../types';
@@ -57,6 +58,7 @@ export interface CatalogRow {
   price_history: { date: string; price: number | string }[] | null;
   stats?: { days?: unknown; since?: unknown; lowest?: unknown; lowest_on?: unknown; highest?: unknown; median?: unknown } | null;
   prediction?: { made_on?: unknown; price?: unknown; horizons?: Record<string, Record<string, unknown>> } | null;
+  season?: { basis?: unknown; listings?: unknown; years?: unknown; months?: Record<string, unknown> } | null;
 }
 
 export const LISTING_ID_PATTERN = /^[a-z][a-z0-9_]{1,30}:[A-Z]{2}:\S{1,160}$/;
@@ -111,6 +113,23 @@ function parseHorizon(raw: Record<string, unknown> | undefined): HorizonPredicti
   if (expectedLow === null || expectedLow <= 0 || basisListings === null || basisListings < 0) return null;
   if (!BASES.includes(basis) || !VERDICTS.includes(verdict)) return null;
   return { pDrop, pGone, expectedLow, basis, basisListings: Math.round(basisListings), verdict };
+}
+
+const SEASON_BASES: SeasonProfile['basis'][] = ['listing', 'category', 'marketplace'];
+
+/** The yearly price pattern, or null when it's missing or malformed (ratios must be plausible). */
+export function parseSeason(raw: CatalogRow['season']): SeasonProfile | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const basis = raw.basis as SeasonProfile['basis'];
+  const listings = num(raw.listings);
+  const years = num(raw.years);
+  if (!SEASON_BASES.includes(basis) || listings === null || listings < 1 || years === null || years <= 0) return null;
+  const months: (number | null)[] = Array.from({ length: 12 }, (_, i) => {
+    const ratio = num(raw.months?.[String(i + 1)]);
+    return ratio !== null && ratio > 0.2 && ratio < 3 ? ratio : null;
+  });
+  if (months.filter((m) => m !== null).length < 6) return null;
+  return { basis, listings: Math.round(listings), years: Math.round(years * 10) / 10, months };
 }
 
 /**
@@ -188,6 +207,7 @@ export function toFashionItem(row: CatalogRow, now: Date = new Date()): FashionI
     priceHistory,
     stats: parseStats(row.stats),
     prediction: row.available === true ? parsePrediction(row.prediction, currentPrice, toDateKey(now)) : null,
+    season: parseSeason(row.season),
     secondhand,
     matchScore: 0,
     matchReasons: [],

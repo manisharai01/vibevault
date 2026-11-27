@@ -1,4 +1,5 @@
-import { buildCapsule, buildOutfits, capsulePlan } from '../services/composer';
+import { buildOutfits, buildWardrobe, completeTheLook, wardrobePlan } from '../services/composer';
+import { similarForLess } from '../services/suggestions';
 import { compareLinks, marketplaceCtaLabel, marketplaceSearchUrl, searchQueryFor } from '../services/linking';
 import { getRecommendations } from '../services/styleEngine';
 import { createDefaultProfile } from '../store/persistence';
@@ -74,24 +75,91 @@ describe('outfits', () => {
   });
 });
 
-describe('capsule wardrobe', () => {
-  it('builds a palette-led capsule that mixes into many outfits', () => {
+describe('complete the look', () => {
+  it('builds outfits around one piece, in its own slot', () => {
     const profile = stylistProfile();
-    const capsule = buildCapsule(ranked(profile), profile, { wishlist: new Set(), rates: RATES })!;
-    expect(capsule.palette.neutrals).toEqual(['black', 'white', 'neutral']);
-    expect(capsule.pieces.length).toBeGreaterThanOrEqual(8);
-    expect(capsule.outfitCount).toBeGreaterThanOrEqual(4);
-    expect(capsule.examples.length).toBeGreaterThan(0);
-    // Every piece stays within the palette (or has no colour information).
-    const palette = new Set([...capsule.palette.neutrals, ...capsule.palette.accents]);
-    expect(capsule.pieces.every((p) => p.item.colors.length === 0 || ['#F5F5F5', '#1C1C1C', '#D8C3A0', '#F3EAD3'].some((c) => p.item.colors.includes(c)) || palette.size > 3)).toBe(true);
-    expect(capsule.total.currency).toBe('INR');
+    const items = ranked(profile);
+    const shirt = items.find((i) => i.title === 'Women White Linen Shirt')!;
+    const [look] = completeTheLook(shirt, items, profile, { wishlist: new Set(), rates: RATES });
+    expect(look.pieces.find((p) => p.slot === 'top')?.item.id).toBe(shirt.id);
+    expect(look.pieces.some((p) => p.slot === 'bottom')).toBe(true);
+    expect(look.pieces.some((p) => p.slot === 'dress')).toBe(false);
+    expect(look.pieces.filter((p) => p.item.id === shirt.id)).toHaveLength(1);
   });
 
-  it('plans a dress slot only when the user shops womenswear', () => {
-    expect(capsulePlan('men').dress).toBeUndefined();
-    expect(capsulePlan('women').dress).toBe(2);
-    expect(buildCapsule([], stylistProfile(), { wishlist: new Set(), rates: RATES })).toBeNull();
+  it('builds a base around shoes, and nothing for a listing that has sold', () => {
+    const profile = stylistProfile();
+    const items = ranked(profile);
+    const sneakers = items.find((i) => i.category === 'Shoes' && i.department !== 'men')!;
+    const [look] = completeTheLook(sneakers, items, profile, { wishlist: new Set(), rates: RATES });
+    expect(look.pieces.find((p) => p.slot === 'shoes')?.item.id).toBe(sneakers.id);
+    expect(look.pieces.some((p) => p.slot === 'top' || p.slot === 'dress')).toBe(true);
+    expect(completeTheLook({ ...sneakers, available: false }, items, profile, { wishlist: new Set(), rates: RATES })).toEqual([]);
+  });
+});
+
+describe('whole wardrobe', () => {
+  it('sizes the wardrobe from sections, occasions and personality, with the reasons', () => {
+    const plan = wardrobePlan({ shopFor: 'women', occasions: ['work', 'evening'], traits: { polish: 0.8, comfort: 0.1 } });
+    expect(plan.targets).toEqual({ top: 8, bottom: 5, dress: 4, layer: 3, shoes: 4, bag: 2, accessory: 3 });
+    expect(plan.reasons).toEqual([
+      'Work & office: two more shirts or blouses and smart trousers.',
+      'Nights out: a going-out piece and a pair of shoes for it.',
+      'You come across as polished: a second tailored layer.',
+    ]);
+    const men = wardrobePlan({ shopFor: 'men', occasions: ['evening'], traits: { warmth: 0.9 } });
+    expect(men.targets.dress).toBe(0);
+    expect(men.targets.top).toBe(9);
+  });
+
+  it('fills the plan with live pieces in one palette that mix into many outfits', () => {
+    const profile = stylistProfile();
+    const wardrobe = buildWardrobe(ranked(profile), profile, { wishlist: new Set(), rates: RATES, owned: [] })!;
+    expect(wardrobe.palette.neutrals).toEqual(['black', 'white', 'neutral']);
+    expect(wardrobe.pieces).toBe(Object.values(wardrobePlan(profile).targets).reduce((a, b) => a + b, 0));
+    expect(wardrobe.picks.length).toBeGreaterThanOrEqual(8);
+    expect(wardrobe.outfitCount).toBeGreaterThanOrEqual(4);
+    expect(wardrobe.examples.length).toBeGreaterThan(0);
+    expect(wardrobe.picks.every((p) => p.item.department !== 'men')).toBe(true);
+    for (const slot of wardrobe.slots) expect(slot.owned.length + slot.picks.length).toBeLessThanOrEqual(Math.max(slot.target, slot.owned.length));
+    expect(wardrobe.total.currency).toBe('INR');
+  });
+
+  it('counts what the user owns and doesn’t suggest buying it again', () => {
+    const profile = stylistProfile();
+    const items = ranked(profile);
+    const shirt = items.find((i) => i.title === 'Women White Linen Shirt')!;
+    const owned = [
+      { id: 'purchase:x', slot: 'top' as const, title: shirt.title, colors: ['white' as const], itemId: shirt.id, image: null, addedAt: NOW.toISOString() },
+      { id: 'owned-1', slot: 'shoes' as const, title: 'My white trainers', colors: ['white' as const], itemId: null, image: null, addedAt: NOW.toISOString() },
+    ];
+    const wardrobe = buildWardrobe(items, profile, { wishlist: new Set(), rates: RATES, owned })!;
+    expect(wardrobe.ownedCount).toBe(2);
+    expect(wardrobe.picks.some((p) => p.item.id === shirt.id)).toBe(false);
+    const shoes = wardrobe.slots.find((s) => s.slot === 'shoes')!;
+    expect(shoes.owned.map((o) => o.title)).toEqual(['My white trainers']);
+    expect(shoes.picks.length).toBeLessThanOrEqual(shoes.target - 1);
+    expect(wardrobe.examples.some((look) => look.pieces.some((p) => p.owned))).toBe(true);
+  });
+
+  it('returns nothing without listings or owned pieces', () => {
+    expect(buildWardrobe([], stylistProfile(), { wishlist: new Set(), rates: RATES, owned: [] })).toBeNull();
+  });
+});
+
+describe('similar for less', () => {
+  it('finds the same kind of piece in a shared style or colour, at least 5% cheaper', () => {
+    const profile = stylistProfile();
+    const items = ranked(profile);
+    const trousers = items.find((i) => i.title === 'Women High Waist Black Jeans')!;
+    const cheaper = similarForLess(trousers, items, 'INR', RATES);
+    expect(cheaper.map((i) => i.title)).toEqual(['Women Straight Leg Beige Trousers']);
+    for (const item of cheaper) {
+      expect(item.category).toBe('Bottoms');
+      expect(item.id).not.toBe(trousers.id);
+      expect(item.currentPrice).toBeLessThanOrEqual(trousers.currentPrice * 0.95);
+    }
+    expect(similarForLess({ ...trousers, currentPrice: 1 }, items, 'INR', RATES)).toEqual([]);
   });
 });
 

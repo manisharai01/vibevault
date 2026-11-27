@@ -25,7 +25,7 @@ function describeHits(triggered: TriggeredAlert[]): string {
 }
 
 function describeBadges(badges: Badge[]): string {
-  return badges.map((b) => `🏅 ${b.icon} ${b.name} — ${b.description}`).join('\n');
+  return badges.map((b) => `${b.name} — ${b.description}`).join('\n');
 }
 
 export async function runLifecycleTasks(options: { force?: boolean; now?: Date } = {}) {
@@ -53,12 +53,12 @@ export async function refreshAndNotify(options: { force?: boolean; now?: Date } 
       .filter(Boolean)
       .join('\n');
     confirmAction({
-      title: triggered.length === 1 ? '🎯 Price drop alert!' : `🎯 ${triggered.length} price drop alerts!`,
+      title: triggered.length === 1 ? 'Price drop alert' : `${triggered.length} price drop alerts`,
       message,
       confirmText: 'View',
       onConfirm: openAlerts,
     });
   } else if (newBadges.length > 0) {
-    notify('🏅 Badge unlocked!', describeBadges(newBadges));
+    notify('Badge unlocked', describeBadges(newBadges));
   }
 }

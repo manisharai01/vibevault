@@ -7,7 +7,7 @@ import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useShallow } from 'zustand/react/shallow';
-import { BorderRadius, Colors, FontSize, Spacing } from '../../constants/theme';
+import { BorderRadius, Colors, Fonts, Spacing } from '../../constants/theme';
 import { useStore } from '../../store/useStore';
 import { countryName } from '../../data/countries';
 import { formatRelativeTime } from '../../utils/format';
@@ -48,7 +48,7 @@ export default function CatalogStatusBanner({ itemCount, onRetry }: Props) {
     if (status === 'idle' || status === 'loading') {
       return (
         <View style={styles.loading} accessibilityLabel="Loading live prices">
-          <ActivityIndicator color={Colors.primaryLight} />
+          <ActivityIndicator color={Colors.ink} />
           <Text style={styles.loadingText}>Loading live marketplace prices…</Text>
         </View>
       );
@@ -91,8 +91,8 @@ export default function CatalogStatusBanner({ itemCount, onRetry }: Props) {
   if (status === 'error') {
     return (
       <TouchableOpacity style={[styles.line, styles.lineWarn]} onPress={onRetry} accessibilityRole="button">
-        <Ionicons name="cloud-offline-outline" size={14} color={Colors.warning} />
-        <Text style={[styles.lineText, { color: Colors.warning }]} numberOfLines={2}>
+        <Ionicons name="cloud-offline-outline" size={14} color={Colors.wait} />
+        <Text style={[styles.lineText, { color: Colors.wait }]} numberOfLines={2}>
           Offline — showing prices saved {formatRelativeTime(fetchedAt)}. Tap to retry.
         </Text>
       </TouchableOpacity>
@@ -101,12 +101,8 @@ export default function CatalogStatusBanner({ itemCount, onRetry }: Props) {
 
   return (
     <View style={styles.line} accessibilityLabel={`Live prices, updated ${formatRelativeTime(updatedAt ?? fetchedAt)}`}>
-      {status === 'loading' ? (
-        <ActivityIndicator size="small" color={Colors.success} />
-      ) : (
-        <View style={styles.liveDot} />
-      )}
-      <Text style={styles.lineText}>
+      {status === 'loading' ? <ActivityIndicator size="small" color={Colors.buy} /> : <View style={styles.liveDot} />}
+      <Text style={styles.lineText} numberOfLines={2}>
         Live prices{sources.length ? ` from ${sources.join(', ')}` : ''} · updated {formatRelativeTime(updatedAt ?? fetchedAt)}
       </Text>
     </View>
@@ -115,7 +111,7 @@ export default function CatalogStatusBanner({ itemCount, onRetry }: Props) {
 
 const styles = StyleSheet.create({
   loading: { alignItems: 'center', paddingVertical: Spacing.xxxl, gap: Spacing.md },
-  loadingText: { color: Colors.textSecondary, fontSize: FontSize.md },
+  loadingText: { fontFamily: Fonts.regular, color: Colors.textSecondary, fontSize: 15 },
   line: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -126,9 +122,11 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: BorderRadius.full,
     backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.border,
     alignSelf: 'flex-start',
   },
-  lineWarn: { backgroundColor: Colors.warning + '1A' },
-  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.success },
-  lineText: { color: Colors.textSecondary, fontSize: FontSize.xs, fontWeight: '600', flexShrink: 1 },
+  lineWarn: { backgroundColor: Colors.waitTint, borderColor: Colors.waitTint },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: Colors.buy },
+  lineText: { fontFamily: Fonts.medium, color: Colors.textSecondary, fontSize: 12, flexShrink: 1 },
 });

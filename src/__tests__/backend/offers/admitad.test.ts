@@ -119,19 +119,24 @@ describe('Admitad coupon parsing', () => {
     expect(parseAdmitadCoupon(coupon({ date_end: '2026-11-26T14:30:00' }), 'IN', NOW)).toBeNull();
     // …and a coupon starting at 14:30 UTC+3 has already started.
     expect(parseAdmitadCoupon(coupon({ date_start: '2026-11-26T14:30:00' }), 'IN', NOW)?.startsAt).toBe('2026-11-26T11:30:00.000Z');
-    // Not yet started: 15:30 UTC+3 = 12:30 UTC.
-    expect(parseAdmitadCoupon(coupon({ date_start: '2026-11-26T15:30:00' }), 'IN', NOW)).toBeNull();
+    // Not yet started: 15:30 UTC+3 = 12:30 UTC — kept as an announced (upcoming) coupon.
+    expect(parseAdmitadCoupon(coupon({ date_start: '2026-11-26T15:30:00' }), 'IN', NOW)?.startsAt).toBe('2026-11-26T12:30:00.000Z');
   });
 
   it('keeps coupons without an end date, with endsAt null', () => {
     expect(parseAdmitadCoupon(coupon({ date_end: null }), 'IN', NOW)?.endsAt).toBeNull();
   });
 
-  it('drops coupons that are not active, expired, not started or have unreadable dates', () => {
+  it('keeps coupons announced up to 90 days ahead, with their future start', () => {
+    expect(parseAdmitadCoupon(coupon({ date_start: '2026-12-01T00:00:00' }), 'IN', NOW)?.startsAt).toBe('2026-11-30T21:00:00.000Z');
+    expect(parseAdmitadCoupon(coupon({ date_start: '2027-06-01T00:00:00' }), 'IN', NOW)).toBeNull();
+  });
+
+  it('drops coupons that are not active, expired, starting too far ahead or have unreadable dates', () => {
     expect(parseAdmitadCoupon(coupon({ status: 'inactive' }), 'IN', NOW)).toBeNull();
     expect(parseAdmitadCoupon(coupon({ status: undefined }), 'IN', NOW)).toBeNull();
     expect(parseAdmitadCoupon(coupon({ date_start: '2018-11-10T00:00:00', date_end: '2018-07-25T23:59:59' }), 'IN', NOW)).toBeNull();
-    expect(parseAdmitadCoupon(coupon({ date_start: '2026-12-01T00:00:00' }), 'IN', NOW)).toBeNull();
+    expect(parseAdmitadCoupon(coupon({ date_start: '2027-03-01T00:00:00' }), 'IN', NOW)).toBeNull();
     expect(parseAdmitadCoupon(coupon({ date_end: 'until stocks last' }), 'IN', NOW)).toBeNull();
   });
 

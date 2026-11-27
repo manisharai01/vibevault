@@ -8,7 +8,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { BorderRadius, Colors, FontSize, Spacing } from '../../constants/theme';
+import { BorderRadius, Colors, Fonts, FontSize, Spacing } from '../../constants/theme';
 import { redeemOffer } from '../../services/redeem';
 import { Offer } from '../../types';
 import { notify } from '../../utils/dialog';
@@ -88,10 +88,10 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.sm,
-    backgroundColor: Colors.card,
-    borderRadius: BorderRadius.md,
-    padding: Spacing.md,
+    gap: Spacing.md,
+    backgroundColor: Colors.surface,
+    borderRadius: BorderRadius.lg,
+    padding: Spacing.lg,
     marginBottom: Spacing.sm,
     borderWidth: 1,
     borderColor: Colors.border,
@@ -99,26 +99,27 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.sm,
-    paddingVertical: Spacing.sm,
+    gap: Spacing.md,
+    paddingVertical: Spacing.md,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
   info: { flex: 1 },
-  merchant: { fontSize: FontSize.xs, color: Colors.primaryLight, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.6 },
-  title: { fontSize: FontSize.md, fontWeight: '600', color: Colors.textPrimary, marginTop: 2 },
-  meta: { fontSize: FontSize.xs, color: Colors.textMuted, marginTop: 2 },
+  merchant: { fontFamily: Fonts.semibold, fontSize: 11, color: Colors.offer, textTransform: 'uppercase', letterSpacing: 1.2 },
+  title: { fontFamily: Fonts.medium, fontSize: FontSize.md, color: Colors.ink, marginTop: 3, lineHeight: 20 },
+  meta: { fontFamily: Fonts.regular, fontSize: 12, color: Colors.textMuted, marginTop: 3 },
   codeBox: {
     alignItems: 'center',
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderStyle: 'dashed',
-    borderColor: Colors.success,
+    borderColor: Colors.offer,
     borderRadius: BorderRadius.sm,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: Colors.offerTint,
   },
-  codeBoxCopied: { backgroundColor: Colors.success + '22' },
-  codeText: { color: Colors.success, fontWeight: '800', fontSize: FontSize.sm, letterSpacing: 0.5 },
-  codeHint: { color: Colors.textMuted, fontSize: 9, fontWeight: '600', marginTop: 1 },
-  dealOnly: { color: Colors.primaryLight, fontWeight: '700', fontSize: FontSize.sm },
+  codeBoxCopied: { borderStyle: 'solid', borderColor: Colors.buy, backgroundColor: Colors.buyTint },
+  codeText: { fontFamily: Fonts.bold, color: Colors.ink, fontSize: FontSize.sm, letterSpacing: 1 },
+  codeHint: { fontFamily: Fonts.medium, color: Colors.textSecondary, fontSize: 10, marginTop: 2 },
+  dealOnly: { fontFamily: Fonts.semibold, color: Colors.ink, fontSize: FontSize.sm, textDecorationLine: 'underline' },
 });
