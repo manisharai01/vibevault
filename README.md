@@ -2,13 +2,18 @@
 
 VibeVault is an Expo / React Native app (iOS, Android and web) that helps people find fashion that fits their personality and style, and buy it at the right time. **Every price is a live marketplace price** recorded daily by the VibeVault backend — nothing is simulated or hardcoded.
 
-- **Discover** – live listings for your country from every connected marketplace, ranked by how well they match you, with the reason for each match ("Matches your Minimalist style · In colours you love").
-- **Item page** – the price is re-checked on the marketplace when you open it. **When to buy**: the chance the price gets ≥5% cheaper within 7, 14 and 30 days, the typical low if you wait, whether one-off pre-owned pieces tend to sell first, the month the item has historically been cheapest (with a year of history), and the model's measured track record. Full price-history chart, valid coupons for that store (tap one to copy its code and open the store), price alerts, purchase logging, and search links for the same item on the other marketplaces in your country.
-- **My Vibe** – the Style Profiler: your country and sections (women's / men's), six personality questions, colours you love and avoid, fit, occasions, budget, pre-owned preference, and a taste check on real live listings. The result explains every style score.
-- **Stylist** – complete outfits for any occasion or style (deterministic: "Next look" walks down the ranking, nothing is random), and a **capsule wardrobe** built around your palette that mixes into as many outfits as possible.
-- **Deals** – top deals right now, **coupons valid today**, price alerts, and how accurate the predictions have actually been.
+- **Discover** – live listings for your country from every connected marketplace, ranked by how well they match you. While browsing, it opens with rails: *Recently viewed*, *Your edit*, *Good time to buy* and *Worth the wait*. Every card carries a timing badge ("Buy now", "Sale 5 Dec", "Wait for Dec").
+- **When to buy, on every listing** – one clear verdict with its evidence. In priority order: an **announced sale** from an official offer feed ("Sale starts 5 Dec"), the model's **short-term call** ("Wait about two weeks"), the **cheapest month** learned from real price history ("Wait for December", based on the listing's own year of prices, or else its category or marketplace), or **buy now** (record low, the cheap season, or the model says prices are more likely to rise). When the data doesn't support a call, it says "No clear signal yet" instead of guessing.
+- **Item page** – the price is re-checked on the marketplace when you open it. It has three tabs:
+  - *Price & timing*: the verdict, a 12-month price strip, the 7/14/30-day chances, history chart, price alerts with suggested targets, coupons for that store, and the same search on the other marketplaces.
+  - *Fit & looks*: your match, how it fits you, pieces to wear it with (save the whole look in one tap), and **similar for less**.
+  - *Details*: the listing's details and purchase logging.
+- **Style** – the Style Profiler: your country and sections (women's / men's), six personality questions, colours you love and avoid, fit, occasions, budget, pre-owned preference, and a taste check on real live listings. The report explains every style score.
+- **Stylist** – a **whole wardrobe** planned from your personality, occasions and budget. It sets how many tops, bottoms, layers, shoes and bags you need and explains why ("Work & office: two more shirts or blouses and smart trousers"). It counts the pieces you already own (purchases are added automatically, and you can add your own) and fills the gaps with live listings in one palette, chosen to make as many outfits as possible. Each pick shows whether to buy now or wait. Outfits mode builds complete looks for any occasion or style.
+- **Deals** – top deals right now, **coupons valid today**, upcoming sales, price alerts, and how accurate the predictions have actually been.
+- **Wishlist** – your saved pieces grouped into a **buying calendar**: buy now, within two weeks, by month, no clear signal, no longer for sale.
 - **Quests** – styling and second-hand challenges with XP, levels and badges.
-- **Profile** – your wishlist (saved items with live prices and advice), country, currency and sections, purchases and money saved, badges, data reset.
+- **Profile** – country, currency and sections, purchases and money saved, badges, data reset.
 
 No screen shows the same action twice, and every button is exercised by the end-to-end test (`npm run e2e`), which fails if a screen shows a duplicate control.
 
@@ -16,7 +21,8 @@ No screen shows the same action twice, and every button is exercised by the end-
 
 ```
  Flipkart · Amazon · eBay · AliExpress · Etsy ─┐
- Google Shopping (SerpApi) · Keepa (history)    │                    ┌─ refresh-catalog  (every 10 min, pg_cron)
+ impact.com brands · Google Shopping (SerpApi)  │
+ Keepa (history)                                │                    ┌─ refresh-catalog  (every 10 min, pg_cron)
  Cuelinks · Admitad · Awin · Flipkart offers   ─┼── Edge Functions ──┤
  ECB exchange rates (frankfurter.dev)          ─┘   (hold the keys)  └─ live-item        (when an item is opened)
                                           │
@@ -40,7 +46,8 @@ The question it answers: *"If I wait 7 / 14 / 30 days, will this be at least 5% 
 1. Every recorded day of every listing is a *situation*: how long it has been tracked, where the price sits in its 60-day range, its 7-day trend and how often the price changed in 30 days.
 2. For past situations the outcome is known (got 5% cheaper / didn't / sold out first). The chance for today's situation is the frequency observed in the same situation, pooled from broad to specific (all listings → same marketplace → same category → this listing's own history) with Bayesian shrinkage, so thin data borrows from broader data instead of guessing.
 3. Nothing is published until at least 30 listings have complete outcomes for a horizon. Predictions are re-published for a listing whenever its price changes on a live check, and hidden when they are more than 3 days old.
-4. **Every published prediction is stored and scored when its window closes** (`prediction_track_record`, `prediction_calibration`). The app shows the real hit rates ("when it said wait, the price dropped 72% of the time — 210 calls") and the Brier score against always guessing the average.
+4. **Seasonal patterns.** Every day the database also learns, from recorded prices only, how each month compares with the year's typical price: per listing (once it has about a year of history), per category on a marketplace, and per marketplace (`season_profiles`). The app recommends waiting for a month only when the saving is at least 5–7% and the pattern rests on enough listings and almost a year of data.
+5. **Every published prediction is stored and scored when its window closes** (`prediction_track_record`, `prediction_calibration`). The app shows the real hit rates ("when it said wait, the price dropped 72% of the time — 210 calls") and the Brier score against always guessing the average.
 
 No prediction of future prices can be 100% certain — sellers set prices — so VibeVault measures and shows how often it is right instead of claiming certainty. Accuracy improves as history accumulates; with Keepa connected, Amazon listings start with up to a year of history (including past sale seasons).
 
@@ -57,10 +64,11 @@ Only from official merchant / affiliate-network feeds (Flipkart offers, Cuelinks
 | eBay | eBay Browse API | any (items that deliver there) | pre-owned by default (`EBAY_CONDITIONS=USED,NEW` for both) |
 | AliExpress | AliExpress Affiliate API | almost any | priced in the local currency where supported; promo codes |
 | Etsy | Etsy Open API v3 | shops in US, GB, CA, AU, DE, FR, IN, … | handmade and vintage; Etsy's attribution is shown in the app |
+| Brand stores | impact.com Partner API (catalogs) | by currency: US, GB, CA, AU, EU, IN, … | every brand that approves your partner account; shown under the brand's name |
 | Google Shopping | via SerpApi (paid third-party service) | any Google Shopping country | stores without an API (Myntra, Ajio, Zalando, ASOS…); one search = one credit |
 | Keepa | Keepa API (paid) | Amazon sites incl. India | price history only |
 
-Not included: Naver Shopping (its API was shut down on 31 Jul 2026); Rakuten Ichiba (its API moved to a new platform in 2026 whose spec isn't public); Mercado Libre and Walmart (their docs couldn't be verified). Stores with no public price API at all (Myntra, Ajio, Meesho, Zalando, Shein, Vinted, Depop…) are covered only through Google Shopping.
+Not included: Naver Shopping (its API was shut down on 31 Jul 2026); Rakuten Ichiba (its API moved to a new platform in 2026 whose spec isn't public); CJ Affiliate, Rakuten Advertising, Mercado Libre and Walmart (their API references load only in a browser, so the formats couldn't be verified). Stores with no public price API at all (Myntra, Ajio, Meesho, Zalando, SHEIN, Zara, H&M, Vinted, Depop…) are covered through Google Shopping, and directly when their affiliate programme on impact.com approves you.
 
 ## Getting started on a new computer
 
@@ -101,7 +109,7 @@ GitHub Actions (`.github/workflows/ci.yml`) runs `npm run check` on Windows, mac
 
 ## Setup
 
-Requirements: a [Supabase](https://supabase.com/dashboard) project, and keys for the marketplaces you want (any subset works; the rest are skipped). Where to get each key is listed in `supabase/functions/.env.example`.
+Requirements: a [Supabase](https://supabase.com/dashboard) project, and keys for the marketplaces you want (any subset works; the rest are skipped). **[KEYS.md](KEYS.md) walks through getting every key, step by step.**
 
 ### 1. Keys
 
@@ -127,7 +135,7 @@ npx supabase@3 functions deploy refresh-catalog live-item --use-api --no-verify-
 
 `--no-verify-jwt` is intended: `refresh-catalog` checks the `x-cron-secret` header itself, and `live-item` only re-checks listings already in the catalogue (at most every 15 minutes each).
 
-Then open the Supabase **SQL editor**, paste `supabase/setup/schedule.sql`, replace `<PROJECT_REF>` and `<REFRESH_CRON_SECRET>`, and run it. It schedules the refresh queue (every 10 minutes) and the price model (daily, 23:40 UTC).
+Then open the Supabase **SQL editor**, paste `supabase/setup/schedule.sql`, replace `<PROJECT_REF>` and `<REFRESH_CRON_SECRET>`, and run it. It schedules the refresh queue (every 10 minutes) and the price model with the seasonal patterns (daily, 23:40 UTC). Run it again after updating VibeVault; it replaces the jobs and keeps existing secrets.
 
 Kick off the first refreshes instead of waiting (each call does the next due marketplace + country and coupon feed; `catalog=` and `offers=` run up to 5 of each):
 
@@ -169,11 +177,12 @@ The anon/publishable key is public by design: it can only read the catalogue. Ne
 App.tsx                      error boundary → safe area → hydration gate → navigation
 src/
   config.ts                  backend URL/key from EXPO_PUBLIC_* env vars
-  components/                shared UI (headers, cards, price chart, status banner, image fallback, lifecycle)
+  components/ui/             design system: text, buttons, pills, page titles, cards, listing cards, sheets, month strip
+  components/common/         price chart, offer rows, status banner, image fallback, error boundary, lifecycle
   constants/                 theme tokens, catalogue vocabulary (categories, styles, colours, occasions)
   data/                      quests, badges, profiler questions, ISO country list
   screens/                   one file per screen
-  services/                  catalogue + API client, price advice, style engine, item traits, stylist, links
+  services/                  catalogue + API client, buy timing, price advice, style engine, wardrobe planner, suggestions, links
   store/                     zustand store, persistence/migration, catalogue cache, derived-state hooks
   utils/                     dates, money formatting and conversion, dialogs, share
   __tests__/                 Jest tests (backend/ covers the marketplace and coupon adapters)

@@ -11,6 +11,7 @@ import { StyleProp, StyleSheet, Text, TouchableOpacity, View, ViewStyle } from '
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { BorderRadius, Colors, Fonts, FontSize, PLATFORM_COLORS, Spacing } from '../../constants/theme';
 import { BuyTiming } from '../../services/buyTiming';
+import { isMultiStoreSource } from '../../services/linking';
 import { FashionItem } from '../../types';
 import { formatMoney } from '../../utils/format';
 import ProductImage from '../common/ProductImage';
@@ -33,7 +34,7 @@ export function TimingBadge({ timing, style }: { timing: BuyTiming | null; style
 
 /** Store name shown on a listing (Google Shopping listings show the actual shop). */
 export function storeName(item: FashionItem): string {
-  return item.source === 'google_shopping' && item.seller ? item.seller : item.siteName;
+  return isMultiStoreSource(item.source) && item.seller ? item.seller : item.siteName;
 }
 
 export function listingLabel(item: FashionItem, showMatch: boolean): string {

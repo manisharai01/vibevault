@@ -109,7 +109,8 @@ const TONES = StyleSheet.create({
 export function Stat({ value, label, color, align = 'left' }: { value: string; label: string; color?: string; align?: 'left' | 'center' }) {
   return (
     <View style={[styles.stat, align === 'center' && { alignItems: 'center' }]} accessible accessibilityLabel={`${label}: ${value}`}>
-      <Text style={[styles.statValue, color ? { color } : null]} numberOfLines={1}>
+      {/* Long amounts ("≈ ₹15,585") step down in size so the whole number stays visible. */}
+      <Text style={[styles.statValue, value.length > 8 ? styles.statValueLong : value.length > 6 ? styles.statValueMid : null, color ? { color } : null]} numberOfLines={1}>
         {value}
       </Text>
       <Text style={styles.statLabel} numberOfLines={2}>
@@ -210,6 +211,8 @@ const styles = StyleSheet.create({
   card: { backgroundColor: Colors.surface, borderRadius: BorderRadius.lg, borderWidth: 1, borderColor: Colors.border, padding: Spacing.lg },
   stat: { flex: 1, gap: 2 },
   statValue: { fontFamily: Fonts.display, fontSize: FontSize.xxl, lineHeight: 30, color: Colors.ink },
+  statValueMid: { fontSize: 21 },
+  statValueLong: { fontSize: 17 },
   statLabel: { fontFamily: Fonts.medium, fontSize: FontSize.xs, color: Colors.textMuted, lineHeight: 14 },
   segmented: { flexDirection: 'row', backgroundColor: Colors.surfaceMuted, borderRadius: BorderRadius.md, padding: 3, marginHorizontal: Spacing.lg },
   segment: { flex: 1, height: 38, borderRadius: BorderRadius.sm, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xs },

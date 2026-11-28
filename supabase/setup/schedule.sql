@@ -1,7 +1,9 @@
 -- ============================================================
 -- VibeVault – schedule the refresh and the price model
 --
--- Run once in the Supabase SQL editor AFTER deploying the functions.
+-- Run in the Supabase SQL editor AFTER deploying the functions. Safe to run again after an
+-- update: jobs are replaced by name and existing secrets are kept (to change a secret, edit it
+-- on the dashboard's Vault page).
 -- Replace the two placeholders first:
 --   <PROJECT_REF>          your project ref (Project Settings → General)
 --   <REFRESH_CRON_SECRET>  the same value you set with `supabase secrets set REFRESH_CRON_SECRET=...`
@@ -10,8 +12,10 @@
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
 
-select vault.create_secret('https://<PROJECT_REF>.supabase.co', 'vibevault_project_url');
-select vault.create_secret('<REFRESH_CRON_SECRET>', 'vibevault_refresh_secret');
+select vault.create_secret('https://<PROJECT_REF>.supabase.co', 'vibevault_project_url')
+where not exists (select 1 from vault.secrets where name = 'vibevault_project_url');
+select vault.create_secret('<REFRESH_CRON_SECRET>', 'vibevault_refresh_secret')
+where not exists (select 1 from vault.secrets where name = 'vibevault_refresh_secret');
 
 -- Jobs from the first version (one per marketplace), if you scheduled them.
 select cron.unschedule(jobname) from cron.job where jobname in ('vibevault-refresh-flipkart', 'vibevault-refresh-ebay');

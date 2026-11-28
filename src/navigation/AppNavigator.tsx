@@ -4,7 +4,7 @@
 // ============================================================
 
 import React from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator, NativeStackNavigationOptions } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -108,6 +108,8 @@ export default function AppNavigator() {
   const insets = useSafeAreaInsets();
   const unseenAlerts = useUnseenTriggeredAlertCount();
   const bottomPadding = Math.max(insets.bottom, 8);
+  // Six tabs on a 320–359 pt wide phone: smaller labels and no side padding so "Discover" fits.
+  const compact = useWindowDimensions().width < 360;
 
   return (
     <Tab.Navigator
@@ -117,7 +119,8 @@ export default function AppNavigator() {
         tabBarStyle: [styles.tabBar, { height: 60 + bottomPadding, paddingBottom: bottomPadding }],
         tabBarActiveTintColor: Colors.ink,
         tabBarInactiveTintColor: Colors.textMuted,
-        tabBarLabelStyle: styles.tabLabel,
+        tabBarLabelStyle: compact ? [styles.tabLabel, styles.tabLabelCompact] : styles.tabLabel,
+        tabBarItemStyle: compact ? styles.tabItemCompact : undefined,
         tabBarIcon: ({ focused, color }) => (
           <View style={styles.iconContainer}>
             <Ionicons name={focused ? TAB_ICONS[route.name].active : TAB_ICONS[route.name].inactive} size={21} color={color} />
@@ -153,6 +156,13 @@ const styles = StyleSheet.create({
   tabLabel: {
     fontFamily: Fonts.medium,
     fontSize: 11,
+  },
+  tabLabelCompact: {
+    fontSize: 10,
+    letterSpacing: -0.1,
+  },
+  tabItemCompact: {
+    paddingHorizontal: 0,
   },
   iconContainer: {
     width: 36,

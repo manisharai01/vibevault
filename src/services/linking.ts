@@ -98,8 +98,15 @@ export function openThriftStoresNearby(): Promise<boolean> {
   return openUrl(THRIFT_STORES_NEARBY_URL);
 }
 
+/**
+ * Sources whose listings come from many different stores: Google Shopping offers, and brands'
+ * own catalogs from impact.com. Their listings are shown under the store's (seller's) name.
+ */
+export function isMultiStoreSource(source: string): boolean {
+  return source === 'google_shopping' || source === 'impact';
+}
+
 export function marketplaceCtaLabel(item: Pick<FashionItem, 'siteName' | 'source' | 'seller'>): string {
-  // Google Shopping listings are offers from a named store.
-  if (item.source === 'google_shopping' && item.seller) return `View at ${item.seller}`;
+  if (isMultiStoreSource(item.source) && item.seller) return `View at ${item.seller}`;
   return `View on ${item.siteName}`;
 }

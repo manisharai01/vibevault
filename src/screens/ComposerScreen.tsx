@@ -214,8 +214,7 @@ export default function ComposerScreen() {
               <Card tone="muted" style={styles.block}>
                 <Text style={Type.eyebrow}>Why this plan</Text>
                 <Text style={[Type.small, { marginTop: Spacing.sm }]}>
-                  A complete {profile.shopFor === 'men' ? 'menswear' : profile.shopFor === 'women' ? 'womenswear' : ''} wardrobe of {wardrobe.pieces} pieces in one palette, so
-                  everything mixes.
+                  {`A complete ${profile.shopFor === 'men' ? 'menswear ' : profile.shopFor === 'women' ? 'womenswear ' : ''}wardrobe of ${wardrobe.pieces} pieces in one palette, so everything mixes.`}
                 </Text>
                 {wardrobe.plan.reasons.map((r) => (
                   <Text key={r} style={[Type.small, { marginTop: 6 }]}>

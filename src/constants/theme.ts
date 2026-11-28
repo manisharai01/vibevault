@@ -171,11 +171,7 @@ export const PLATFORM_COLORS: Record<string, string> = {
   etsy: '#F1641E',
   aliexpress: '#E62E04',
   google_shopping: '#4285F4',
-  cj: '#00A2B9',
-  rakuten_advertising: '#BF0000',
   impact: '#FF5C35',
-  walmart: '#0071DC',
-  awin: '#FF7A00',
 };
 
 /** Text colour that stays readable on top of a colour. */

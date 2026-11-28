@@ -192,5 +192,8 @@ describe('links', () => {
   it('labels the store button with the site or, for Google Shopping, the store', () => {
     expect(marketplaceCtaLabel(makeEbayItem())).toBe('View on eBay (ships to India)');
     expect(marketplaceCtaLabel({ siteName: 'Google Shopping', source: 'google_shopping', seller: 'Myntra' })).toBe('View at Myntra');
+    // impact.com listings come from each brand's own store.
+    expect(marketplaceCtaLabel({ siteName: 'Brand stores', source: 'impact', seller: 'Northwind Apparel' })).toBe('View at Northwind Apparel');
+    expect(marketplaceCtaLabel({ siteName: 'Brand stores', source: 'impact', seller: null })).toBe('View on Brand stores');
   });
 });

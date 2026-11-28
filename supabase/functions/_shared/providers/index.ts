@@ -7,6 +7,7 @@ import { amazonDefinition } from './amazon.ts';
 import { ebayDefinition } from './ebay.ts';
 import { etsyDefinition } from './etsy.ts';
 import { flipkartDefinition } from './flipkart.ts';
+import { impactDefinition } from './impact.ts';
 import { keepaDefinition } from './keepa.ts';
 import { serpapiDefinition } from './serpapi.ts';
 
@@ -16,6 +17,7 @@ export const PROVIDERS: ProviderDefinition[] = [
   ebayDefinition,
   aliexpressDefinition,
   etsyDefinition,
+  impactDefinition,
   serpapiDefinition,
 ];
 

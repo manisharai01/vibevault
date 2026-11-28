@@ -100,7 +100,7 @@ describe('catalogue functions', () => {
       `select (select count(*)::int from marketplaces) as m, (select count(*)::int from marketplace_markets) as mm,
               (select count(*)::int from search_terms) as t`,
     );
-    assert.equal(counts.m, 6);
+    assert.equal(counts.m, 7);
     assert.ok(counts.mm >= 65, `markets: ${counts.mm}`);
     assert.ok(counts.t >= 55, `terms: ${counts.t}`);
   });
